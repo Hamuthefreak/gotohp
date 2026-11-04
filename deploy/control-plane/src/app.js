@@ -156,6 +156,11 @@ export function createApp(config) {
 		const user = await auth.getUser(request, env);
 		if (!user) return { error: json({ error: 'sign in required' }, 401) };
 
+		// The password login has exactly one account, so whoever holds the
+		// password is the owner. Only identity-provider accounts race for the
+		// first claim, which keeps the D1 state API closed on the public host.
+		if (user.sub === LOCAL_SUB) return { user };
+
 		let ownerSub = await kget('owner_sub');
 		if (!ownerSub) {
 			await kset('owner_sub', user.sub);
@@ -237,7 +242,7 @@ export function createApp(config) {
 			return json({
 				signedIn: Boolean(user),
 				email: user?.email || '',
-				isOwner: Boolean(user && ownerSub === user.sub),
+				isOwner: Boolean(user && (user.sub === LOCAL_SUB || ownerSub === user.sub)),
 				claimable: Boolean(user && !ownerSub),
 				loginUrl: auth.loginUrl || null,
 				signoutUrl: auth.signoutUrl || null,

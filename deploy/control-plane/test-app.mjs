@@ -87,6 +87,31 @@ await test('the first account claims the dashboard and a second is refused', asy
 	assert.equal(store._raw.get('owner_sub'), 'a');
 });
 
+await test('the password login is the owner even after another account claimed it', async () => {
+	const store = memoryStore();
+	const build = (user) =>
+		createApp({
+			store,
+			origin: ORIGIN,
+			sameOrigin: () => true,
+			auth: { getUser: async () => user },
+		});
+
+	// An identity-provider account got there first, which is what left the
+	// password account locked out with "signed in as operator".
+	await build({ sub: 'google-oauth2|99', email: 'someone@example.com' })(req('/api/dashboard'), {});
+	assert.equal(store._raw.get('owner_sub'), 'google-oauth2|99');
+
+	const operator = build({ sub: 'operator', email: 'hamu' });
+	assert.equal((await operator(req('/api/dashboard'), {})).status, 200);
+	const session = await (await operator(req('/api/session'), {})).json();
+	assert.equal(session.isOwner, true);
+	assert.equal(session.email, 'hamu');
+
+	// A second identity-provider account is still refused.
+	assert.equal((await build({ sub: 'b', email: 'b@x' })(req('/api/dashboard'), {})).status, 403);
+});
+
 await test('dashboard carries every setting, the schema and a server timestamp', async () => {
 	const { app } = makeApp();
 	const res = await app(req('/api/dashboard'), {});

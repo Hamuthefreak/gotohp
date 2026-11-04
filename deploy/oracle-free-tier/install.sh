@@ -113,13 +113,17 @@ fi
 if [[ $WITH_SFTP == true ]]; then
 	say "creating SFTP-only user $SFTP_USER"
 	CHROOT=$(dirname -- "$SRC_DIR")
-	install -d -m 0755 -o root -g root "$CHROOT"
-	install -d -m 0755 -o "$SFTP_USER" -g "$SFTP_USER" "$SRC_DIR" 2>/dev/null || true
 
+	# The account has to exist before anything is chowned to it, and the chroot
+	# has to exist before the SFTP directory inside it. Home creation is skipped
+	# on purpose: the chroot must stay root-owned and unwritable by the user, or
+	# sshd refuses to chroot into it.
 	if ! id -u "$SFTP_USER" >/dev/null 2>&1; then
-		useradd --create-home --home-dir "$CHROOT" --shell /usr/sbin/nologin \
-			--user-group "$SFTP_USER"
+		useradd --no-create-home --home-dir "$CHROOT" \
+			--shell /usr/sbin/nologin --user-group "$SFTP_USER"
 	fi
+	install -d -m 0755 -o root -g root "$CHROOT"
+	install -d -m 0755 -o "$SFTP_USER" -g "$SFTP_USER" "$SRC_DIR"
 
 	# sshd refuses a chroot that the user can write to, and needs the account to
 	# authenticate by password (the app cannot use a key prompt).
@@ -174,7 +178,6 @@ EOF
 	systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null ||
 		echo "reload sshd manually to apply $DROPIN" >&2
 
-	chown "$SFTP_USER:$SFTP_USER" "$SRC_DIR"
 fi
 
 say "installing systemd units"

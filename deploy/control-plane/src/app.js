@@ -17,7 +17,7 @@ const TEXT_HEAD = {
 	'cache-control': 'no-store',
 };
 
-const COMMAND_KINDS = ['run-now', 'refresh', 'rescan', 'creds-set', 'creds-remove', 'clear-log', 'delete-files'];
+const COMMAND_KINDS = ['run-now', 'refresh', 'rescan', 'creds-set', 'creds-remove', 'clear-log'];
 
 /** Credentials are account emails; nothing else ever reaches a shell. */
 const EMAIL = /^[A-Za-z0-9._%+@-]{3,120}$/;

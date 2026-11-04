@@ -26,6 +26,8 @@ log() { printf '%s control: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
 CONTROL_URL=${CONTROL_URL:-}
 GOTOHP_BIN=${GOTOHP_BIN:-/usr/local/bin/gotohp-cli}
 STATE_DIR=${STATE_DIR:-/var/lib/gotohp-sync}
+GOTOHP_CONFIG=${GOTOHP_CONFIG:-$STATE_DIR/gotohp.config}
+SYNC_USER=${CONTROL_SYNC_USER:-gotohpsync}
 
 [[ -n $CONTROL_URL ]] || exit 0
 [[ -r $TOKEN_FILE ]] || {
@@ -124,11 +126,13 @@ valid_setting() {
 
 declare -A WANT=()
 declare -a CMDS=()
+CREDS_B64=""
 
 parse_response() {
 	local line key value
 	while IFS= read -r line; do
 		case $line in
+		CREDS\ *) CREDS_B64=${line#CREDS } ;;
 		SET\ *)
 			line=${line#SET }
 			key=${line%%=*}
@@ -202,8 +206,33 @@ apply_timer() {
 	fi
 }
 
+# The control plane never runs anything as root on the box: credentials and
+# config belong to the sync user, who owns the config file.
+run_as_sync() {
+	if command -v runuser >/dev/null 2>&1; then
+		runuser -u "$SYNC_USER" -- "$@"
+	else
+		sudo -n -u "$SYNC_USER" -- "$@"
+	fi
+}
+
+# What the box really holds, read from the CLI rather than from a guess.
+accounts_json() {
+	local list
+	list=$("$GOTOHP_BIN" creds list --config "$GOTOHP_CONFIG" 2>/dev/null | awk '
+		/^  ([*]| ) / {
+			email = $3
+			if (email ~ /@/) {
+				if (n++) printf ","
+				printf "{\"email\":\"%s\",\"selected\":%s}", email, ($2 == "*") ? "true" : "false"
+			}
+		}
+	') || list=""
+	printf '{"list":[%s]}' "$list"
+}
+
 run_command() {
-	local id=$1 kind=$2 status=fail message="unknown command"
+	local id=$1 kind=$2 arg=${3:-} status=fail message="unknown command"
 
 	case $kind in
 	run-now)
@@ -218,10 +247,29 @@ run_command() {
 		rm -f "$STATE_DIR/scan.previous"
 		status=ok
 		message="next run re-snapshots the repository"
-		;;
-	refresh)
+		;;		refresh)
 		status=ok
 		message="state refreshed"
+		;;
+	creds-set)
+		if [[ -z $arg ]]; then
+			message="no account given"
+		elif out=$(run_as_sync "$GOTOHP_BIN" creds set "$arg" --config "$GOTOHP_CONFIG" 2>&1); then
+			status=ok
+			message="uploads now go to $arg"
+		else
+			message=$(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)
+		fi
+		;;
+	creds-remove)
+		if [[ -z $arg ]]; then
+			message="no account given"
+		elif out=$(run_as_sync "$GOTOHP_BIN" creds remove "$arg" --config "$GOTOHP_CONFIG" 2>&1); then
+			status=ok
+			message="removed $arg"
+		else
+			message=$(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)
+		fi
 		;;
 	esac
 
@@ -255,12 +303,38 @@ if ((${#WANT[@]})); then
 fi
 
 results=""
+
+# A credential from the dashboard: piped on stdin so it never appears in
+# process listings, applied as the sync user, and reported back either way.
+if [[ -n ${CREDS_B64:-} ]]; then
+	secret=$(printf '%s' "$CREDS_B64" | base64 -d 2>/dev/null) || secret=""
+	if [[ -z $secret ]]; then
+		results+="CREDS_RESULT fail could not decode the credential"$'\n'
+	else
+		if out=$(printf '%s\n' "$secret" | run_as_sync "$GOTOHP_BIN" creds add - --config "$GOTOHP_CONFIG" 2>&1); then
+			results+="CREDS_RESULT ok $(printf '%s' "$out" | tr '\n' ' ' | tr -s ' ' | tail -c 200)"$'\n'
+			log "added a Google account from the dashboard"
+		else
+			results+="CREDS_RESULT fail $(printf '%s' "$out" | tr '\n' ' ' | tr -s ' ' | tail -c 200)"$'\n'
+			log "a Google account from the dashboard was rejected: $out"
+		fi
+	fi
+	unset secret
+fi
+
 for entry in ${CMDS[@]+"${CMDS[@]}"}; do
 	entry=${entry#CMD }
 	id=${entry%% *}
-	kind=${entry#* }
-	results+=$(run_command "$id" "$kind")$'\n'
+	rest=${entry#* }
+	kind=${rest%% *}
+	arg=""
+	[[ $rest == *" "* ]] && arg=${rest#* }
+	results+=$(run_command "$id" "$kind" "$arg")$'\n'
 done
+
+# Always report the account list, so the dashboard shows what the CLI sees
+# rather than what it last asked for.
+results+="ACCOUNTS $(accounts_json)"$'\n'
 
 if [[ -n $results ]]; then
 	printf '%s' "$results" |

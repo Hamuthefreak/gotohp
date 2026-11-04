@@ -72,31 +72,45 @@ the schedule actually changed.
 
 ## Login and ownership
 
-The **first account to open the dashboard claims it**; every other account gets
-403 from then on. That keeps the relay to a single operator, and a claimed
-dashboard cannot be taken over by whoever finds the URL. Settings, live activity
-and the device token all live behind that check, on the server, never in the
-browser.
+The Vercel deployment signs in with **one password** (`DASHBOARD_PASSWORD`), kept
+for 30 days in a signed `HttpOnly` cookie. That is enough for a dashboard that
+controls one person's relay and does not need an identity provider. The Sites
+deployment keeps Freebuff sign-in.
+
+The **first account to open the Sites dashboard claims it**; every other account
+gets 403 from then on. Settings, live activity and the device token all live
+behind that check, on the server, never in the browser.
 
 The device token is shown once and stored only as a SHA-256 hash.
+
+## Google Photos accounts
+
+gotohp does not use a normal OAuth consent flow: it exchanges the `oauth_token`
+cookie from <https://accounts.google.com/EmbeddedSetup> for a Photos credential.
+That cookie is not readable from another site, so the dashboard cannot capture
+it for you - but it can carry it to the relay, which is the part that used to
+mean editing a repository secret.
+
+1. **Sign in with Google** opens Embedded Setup in a new tab.
+2. Sign in as the account you want the photos in, then copy the `oauth_token`
+   cookie's value.
+3. Paste it into the dashboard. It is queued, delivered to the VM exactly once,
+   applied with `gotohp-cli creds add -` as the sync user, and then deleted from
+   the control plane.
+
+The card then lists every account on the box, from `gotohp-cli creds list`.
+**Use this** runs `creds set`, so switching where uploads land is one click;
+**Remove** runs `creds remove`. Photos already uploaded stay where they are.
 
 ## Vercel deployment
 
 Already provisioned: project `gotohp-relay`, a private Blob store `gotohp-live`
 (bound as `BLOB_READ_WRITE_TOKEN`), and the environment variables `APP_ORIGIN`,
-`AUTH_SECRET`, `ALLOWED_EMAIL`.
+`AUTH_SECRET`, `DASHBOARD_PASSWORD`.
 
-Sign-in with Google needs an OAuth client of your own, which only you can create:
-
-1. <https://console.cloud.google.com/apis/credentials> → **Create credentials** →
-   **OAuth client ID** → type **Web application**.
-2. Authorised redirect URI: `https://gotohp-relay.vercel.app/api/auth/callback`
-3. Add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to the Vercel project
-   (Settings → Environment Variables), then redeploy.
-
-Until those two exist the dashboard shows a setup card instead of a login form.
-`ALLOWED_EMAIL` is the only address accepted; leave it unset to let the first
-Google account claim the dashboard.
+To change the password later, edit `DASHBOARD_PASSWORD` in the Vercel project
+(Settings → Environment Variables) and redeploy. Existing cookies stay valid
+until they expire; `AUTH_SECRET` is what signs them.
 
 Deploy from this directory:
 

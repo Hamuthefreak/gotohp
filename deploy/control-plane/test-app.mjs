@@ -198,6 +198,43 @@ await test('device channel: token, poll, activity, commands, results', async () 
 	assert.ok(after.events.some((e) => /run-now.*done/.test(e.message)));
 });
 
+await test('accounts: credential is delivered once, selection is a command', async () => {
+	const { app } = makeApp();
+	const issued = await app(post('/api/device/token', {}, 'application/json', { origin: ORIGIN }), {});
+	const { token } = await issued.json();
+	const auth = { authorization: `Bearer ${token}` };
+	const poll = async () => (await app(post('/api/device/poll', 'agent=1\n', 'text/plain', auth), {})).text();
+
+	// Too short to be a cookie, and cross-origin posts are refused.
+	assert.equal((await app(post('/api/accounts/credential', { value: 'short' }, 'application/json', { origin: ORIGIN }), {})).status, 400);
+	assert.equal((await app(post('/api/accounts/credential', { value: 'x'.repeat(40) }), {})).status, 403);
+
+	const accepted = await app(post('/api/accounts/credential', { value: 'a'.repeat(40) }, 'application/json', { origin: ORIGIN }), {});
+	assert.equal(accepted.status, 200);
+
+	const first = (await poll()).split('\n').find((l) => l.startsWith('CREDS '));
+	assert.ok(first, 'the credential is handed to the device');
+	assert.equal(Buffer.from(first.slice(6), 'base64').toString(), 'a'.repeat(40));
+
+	// Delivered once: a replayed poll must not return it again.
+	assert.equal((await poll()).split('\n').find((l) => l.startsWith('CREDS ')), undefined);
+
+	// The box reports what it actually holds.
+	await app(
+		post('/api/device/result', 'ACCOUNTS {"list":[{"email":"me@example.com","selected":true},{"email":"old@example.com","selected":false}]}\n', 'text/plain', auth),
+		{},
+	);
+	const reported = await (await app(req('/api/activity'), {})).json();
+	assert.equal(reported.accounts.selected, 'me@example.com');
+	assert.equal(reported.accounts.list.length, 2);
+
+	// Selecting and removing become commands carrying an email, nothing else.
+	assert.equal((await app(post('/api/accounts/select', { email: 'old@example.com' }, 'application/json', { origin: ORIGIN }), {})).status, 200);
+	assert.equal((await app(post('/api/accounts/remove', { email: 'not an email' }, 'application/json', { origin: ORIGIN }), {})).status, 400);
+	const after = await poll();
+	assert.match(after, /CMD \w+ creds-set old@example\.com/);
+});
+
 await test('unknown api paths 404, everything else falls through to static assets', async () => {
 	const { app } = makeApp();
 	assert.equal((await app(req('/api/nope'), {})).status, 404);

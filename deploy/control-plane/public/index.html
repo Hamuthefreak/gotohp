@@ -172,6 +172,18 @@
 			#note.good { color: var(--accent); }
 
 			code, .mono { font: 12.5px/1.5 var(--mono); }
+			ul.acct { list-style: none; margin: 0 0 12px; padding: 0; }
+			ul.acct li { display: flex; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid #ffffff08; }
+			ul.acct li:last-child { border-bottom: 0; }
+			ul.acct .who { flex: 1; font: 13px/1.4 var(--mono); word-break: break-all; }
+			ul.acct .badge { width: 8px; height: 8px; border-radius: 50%; background: #ffffff1a; flex: 0 0 auto; }
+			ul.acct .badge.on { background: var(--accent); box-shadow: 0 0 0 3px #3ddc8422; }
+			ul.acct button { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; }
+			#cred-form { margin-top: 12px; }
+			#cred-form input[type="password"] {
+				width: 100%; font: 13px/1.4 var(--mono); color: var(--text); background: #0a1016;
+				border: 1px solid var(--line-strong); border-radius: 9px; padding: 8px 10px; margin-bottom: 8px;
+			}
 			.token { display: block; margin-top: 10px; padding: 11px; border-radius: 10px; background: #070b10; border: 1px dashed var(--line-strong); word-break: break-all; color: var(--accent); }
 
 			/* ---------- gate ---------- */
@@ -251,6 +263,21 @@
 					</div>
 				</section>
 			</div>
+
+			<section class="card" id="accounts-card" style="margin-bottom: 14px">
+				<h3>Google Photos account</h3>
+				<p class="small muted" id="accounts-state">checking…</p>
+				<ul class="acct" id="account-list"></ul>
+				<button id="signin-google" type="button" style="margin-top: 10px">Sign in with Google</button>
+				<div id="cred-form" class="hidden">
+					<p class="small muted" style="margin: 12px 0 8px">
+						Sign in to the Google account you want the photos in, then copy the <code>oauth_token</code>
+						cookie's value and paste it here. It goes straight to the relay and switches uploads to it.
+					</p>
+					<input type="password" id="cred-value" placeholder="oauth_token value" autocomplete="off" />
+					<button id="cred-save" type="button">Add this account</button>
+				</div>
+			</section>
 
 			<form id="settings"><div class="groups" id="groups"></div></form>
 
@@ -339,17 +366,7 @@
 				const s = (session.info = res.body || {});
 
 				if (!s.configured) {
-					gate('Google sign-in is not set up on this deployment yet.', null);
-					$('#gate-action').append(
-						h('ol', {}, ''),
-					);
-					const list = $('#gate-action ol');
-					list.append(
-						h('li', {}, 'Create an OAuth client in Google Cloud Console (type: Web application).'),
-						h('li', {}, `Add this authorised redirect URI: ${location.origin}/api/auth/callback`),
-						h('li', {}, 'Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and AUTH_SECRET to the Vercel project.'),
-						h('li', {}, 'Redeploy, then reload this page.'),
-					);
+					gate('No dashboard password is set. Add DASHBOARD_PASSWORD and AUTH_SECRET to the deployment, then reload.', null);
 					return;
 				}
 
@@ -378,6 +395,7 @@
 				$('#app').classList.remove('hidden');
 				$('#whoami').textContent = data.ownerEmail || session.info?.email || '';
 				renderDevice();
+				renderAccounts();
 				renderSettings();
 				renderLive();
 				note('');
@@ -496,6 +514,7 @@
 				for (const [k, v] of sysrows) sys.append(h('dt', {}, k), h('dd', {}, v));
 
 				renderFeed();
+				renderAccounts();
 			}
 
 			function shortResult(raw) {
@@ -536,6 +555,56 @@
 					? 'A device token exists. The VM can read settings as soon as it has the token.'
 					: 'Not paired yet: generate a token, store it as the repository secret CONTROL_DEVICE_TOKEN, then re-run the deploy.';
 				$('#gen-token').textContent = paired ? 'Rotate device token' : 'Generate device token';
+			}
+
+			// ------------------------------------------------------------- accounts
+
+			function renderAccounts() {
+				const state = (live && live.accounts) || (data && data.accounts) || { list: [], selected: '' };
+				const accounts = state.list || [];
+				const list = $('#account-list');
+				list.replaceChildren();
+
+				$('#accounts-state').textContent = accounts.length
+					? `New photos go to ${state.selected || accounts[0].email}.`
+					: 'No Google account on the relay yet - add one below.';
+
+				for (const account of accounts) {
+					const active = account.selected || account.email === state.selected;
+					const li = h('li');
+					li.append(h('span', { class: `badge${active ? ' on' : ''}` }));
+					li.append(h('span', { class: 'who' }, account.email));
+					if (!active) {
+						li.append(
+							h('button', { type: 'button', onclick: () => accountAction('/api/accounts/select', account.email, 'Switching…') }, 'Use this'),
+						);
+					}
+					li.append(
+						h(
+							'button',
+							{
+								class: 'ghost',
+								type: 'button',
+								onclick: () => {
+									if (!confirm(`Remove ${account.email}? Photos already uploaded stay where they are.`)) return;
+									accountAction('/api/accounts/remove', account.email, 'Removing…');
+								},
+							},
+							'Remove',
+						),
+					);
+					list.append(li);
+				}
+			}
+
+			async function accountAction(path, email, pending) {
+				flash(pending);
+				const res = await api(path, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ email }),
+				});
+				flash(res.ok ? 'Queued - the relay applies it within 20 seconds.' : res.body?.error || 'That did not work.', !res.ok);
 			}
 
 			// ------------------------------------------------------------- settings
@@ -656,6 +725,26 @@
 				$('#token-box').classList.remove('hidden');
 				data.device.paired = true;
 				renderDevice();
+			});
+
+			$('#signin-google').addEventListener('click', () => {
+				window.open('https://accounts.google.com/EmbeddedSetup', '_blank', 'noopener');
+				$('#cred-form').classList.remove('hidden');
+				$('#cred-value').focus();
+			});
+
+			$('#cred-save').addEventListener('click', async () => {
+				const input = $('#cred-value');
+				const value = input.value.trim();
+				if (!value) return flash('Paste the oauth_token value first.', true);
+				const res = await api('/api/accounts/credential', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ value }),
+				});
+				if (!res.ok) return flash(res.body?.error || 'The relay refused that value.', true);
+				input.value = '';
+				flash('Handed to the relay - it appears above within 20 seconds.');
 			});
 
 			$('#signout').addEventListener('click', async () => {

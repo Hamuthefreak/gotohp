@@ -1,0 +1,26 @@
+[Unit]
+Description=Upload Watermelon backup files to Google Photos (gotohp-cli)
+Documentation=https://github.com/Hamuthefreak/gotohp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gotohpsync
+Group=gotohpsync
+Environment=GOTOHP_SYNC_CONFIG=/etc/gotohp-sync/config.env
+ExecStart=/usr/local/bin/gotohp-sync
+
+# A first push of a whole library can take hours; later runs are minutes.
+TimeoutStartSec=12h
+
+# Uploading is I/O bound and must never starve the box that is also serving
+# SFTP from the phone.
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+NoNewPrivileges=yes
+
+# /var/lib/gotohp-sync holds the ledger, the gotohp config and the credentials.
+StateDirectory=gotohp-sync
+StateDirectoryMode=0700

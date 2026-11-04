@@ -1,0 +1,199 @@
+name: Deploy relay to VM
+
+# Builds gotohp-cli for Linux and installs the relay on the VM after a change
+# lands on main. The first run bootstraps the box (users, SFTP chroot, config,
+# units); later runs only swap the binary and restart the timer.
+#
+# Setup and secrets: deploy/oracle-free-tier/SETUP.md
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/oracle-free-tier/**"
+      - "core/**"
+      - "internal/**"
+      - "generated/**"
+      - "main.go"
+      - "main_cli.go"
+      - "version.go"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-vm
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build CLI and deploy to the VM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The relay is shell, so prove its contract before shipping it.
+      - name: Test the relay script
+        run: bash deploy/oracle-free-tier/test-sync.sh
+
+      - name: Build gotohp-cli
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -tags cli \
+              -trimpath -buildvcs=false -ldflags="-w -s" \
+              -o "dist/gotohp-cli-$arch" .
+          done
+          ls -lh dist
+
+      - name: Prepare SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          for name in VM_HOST VM_USER VM_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::repository secret $name is missing - see deploy/oracle-free-tier/SETUP.md"
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VM_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          if [ -n "$VM_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$VM_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+            echo "SSH_HOST_KEY_CHECK=yes" >> "$GITHUB_ENV"
+          else
+            : > "$HOME/.ssh/known_hosts"
+            echo "SSH_HOST_KEY_CHECK=accept-new" >> "$GITHUB_ENV"
+            echo "::notice::VM_KNOWN_HOSTS is not set, so the host key is trusted on first contact. SETUP.md shows how to pin it."
+          fi
+
+      - name: Ship and install
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          WATERMELON_SFTP_PASSWORD: ${{ secrets.WATERMELON_SFTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking="$SSH_HOST_KEY_CHECK"
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+
+          arch=$(ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" 'uname -m')
+          case $arch in
+            x86_64) target=amd64 ;;
+            aarch64 | arm64) target=arm64 ;;
+            *)
+              echo "::error::unsupported VM architecture: $arch"
+              exit 1
+              ;;
+          esac
+          echo "VM reports $arch, shipping the $target build"
+
+          ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" 'install -d -m 755 /tmp/gotohp-deploy'
+          scp -q "${ssh_opts[@]}" "dist/gotohp-cli-$target" \
+            "$VM_USER@$VM_HOST:/tmp/gotohp-deploy/gotohp-cli"
+          scp -q "${ssh_opts[@]}" \
+            deploy/oracle-free-tier/sync.sh \
+            deploy/oracle-free-tier/install.sh \
+            deploy/oracle-free-tier/config.env.example \
+            deploy/oracle-free-tier/gotohp-sync.service \
+            deploy/oracle-free-tier/gotohp-sync.timer \
+            deploy/oracle-free-tier/remote-update.sh \
+            "$VM_USER@$VM_HOST:/tmp/gotohp-deploy/"
+
+          if [ -n "${WATERMELON_SFTP_PASSWORD:-}" ]; then
+            # Through stdin, never argv: a password on the command line is
+            # visible to every user on the box via ps.
+            printf '%s' "$WATERMELON_SFTP_PASSWORD" |
+              ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+                'umask 077; cat > /tmp/gotohp-sftp.pass'
+            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+              'sudo -n env SFTP_PASSWORD_FILE=/tmp/gotohp-sftp.pass bash /tmp/gotohp-deploy/remote-update.sh /tmp/gotohp-deploy'
+          else
+            echo "::notice::WATERMELON_SFTP_PASSWORD is not set; the installer will generate one."
+            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+              'sudo -n bash /tmp/gotohp-deploy/remote-update.sh /tmp/gotohp-deploy'
+          fi
+
+      - name: Add the Google account on its first run
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          GOOGLE_OAUTH_TOKEN: ${{ secrets.GOOGLE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking="$SSH_HOST_KEY_CHECK"
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+
+          if [ -z "${GOOGLE_OAUTH_TOKEN:-}" ]; then
+            echo "::notice::GOOGLE_OAUTH_TOKEN is not set, so no Google account was added. See step 5 of SETUP.md."
+            exit 0
+          fi
+
+          if ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n test -s /var/lib/gotohp-sync/gotohp.config'; then
+            echo "a Google account is already configured; leaving it alone"
+            exit 0
+          fi
+
+          printf '%s\n' "$GOOGLE_OAUTH_TOKEN" |
+            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+              'sudo -n -u gotohpsync /usr/local/bin/gotohp-cli creds add - --config /var/lib/gotohp-sync/gotohp.config'
+          echo "Google account added"
+
+      - name: Report what is installed
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking="$SSH_HOST_KEY_CHECK"
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+
+          ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n bash -lc "gotohp-cli version; systemctl is-active gotohp-sync.timer; ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"' \
+            | tee /tmp/report.txt
+
+          {
+            echo "### Deployed $(git rev-parse --short HEAD)"
+            echo '```'
+            cat /tmp/report.txt
+            echo '```'
+            echo "If Watermelon has no node yet: host this IP, user \`watermelon\`, base path \`/repo\`."
+          } >> "$GITHUB_STEP_SUMMARY"

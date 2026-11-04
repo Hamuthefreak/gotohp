@@ -305,6 +305,7 @@ entry in `src/schema.js`, one flag in `sync.sh`, one check in `test-sync.sh`.
 | `'New-Item' is not recognized` | you are in cmd.exe, not PowerShell | use the cmd.exe block in step 1 |
 | `saving key "$env:USERPROFILE\..." failed` | PowerShell syntax typed into cmd.exe, so the path was not expanded | same |
 | `The system cannot find the path specified` | `%USERPROFILE%\.ssh` does not exist yet | `mkdir "%USERPROFILE%\.ssh"` |
+| Watermelon: `Citadel.SFTPMessage.Status/1` | sshd accepted the login, then the session died because `/srv/watermelon/repo` did not exist (a first deploy that failed halfway used to look installed) | re-run **Deploy relay to VM**; fixed versions create it |
 | `Too many arguments` from `ssh-keygen` | PowerShell dropped the empty `-N ""` | let it prompt and press Enter twice |
 | the deploy asks for a passphrase | the key has one; Actions cannot type it | regenerate without a passphrase (step 1) |
 | `Too many arguments` from `ssh-keygen` | PowerShell dropped the empty `-N ""` | use the Windows form in step 1 |

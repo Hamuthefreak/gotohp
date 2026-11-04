@@ -12,6 +12,7 @@
 set -Eeuo pipefail
 
 SRC=${1:?usage: remote-update.sh <staging-directory>}
+SYNC_CONF=${GOTOHP_SYNC_CONFIG:-/etc/gotohp-sync/config.env}
 [[ $EUID -eq 0 ]] || {
 	echo "run this as root" >&2
 	exit 1
@@ -63,8 +64,19 @@ if ! /usr/local/bin/gotohp-cli.new version >/dev/null 2>&1; then
 fi
 mv -f /usr/local/bin/gotohp-cli.new /usr/local/bin/gotohp-cli
 
-if ! id -u gotohpsync >/dev/null 2>&1 || [[ ! -s /etc/gotohp-sync/config.env ]]; then
-	echo "==> first deploy: creating users, SFTP chroot, config and units"
+# A first run that fails halfway leaves the account and the config behind
+# without the SFTP directory. That half-state then looks "already installed" on
+# the next deploy, which skips the very step that failed - so the directory the
+# phone writes into never gets created. Treat any missing piece as not installed
+# and bootstrap again; install.sh is idempotent and keeps the existing config.
+needs_bootstrap() {
+	! id -u gotohpsync >/dev/null 2>&1 ||
+		[[ ! -s $SYNC_CONF ]] ||
+		[[ ! -d ${SFTP_SRC_DIR:-/srv/watermelon/repo} ]]
+}
+
+if needs_bootstrap; then
+	echo "==> bootstrap: users, SFTP chroot, config and units"
 	bash "$SRC/install.sh" --binary "$SRC/gotohp-cli" --non-interactive
 else
 	echo "==> updating an existing install"

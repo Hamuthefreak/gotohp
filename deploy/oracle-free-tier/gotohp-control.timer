@@ -6,7 +6,7 @@ OnBootSec=60s
 # 20 seconds is the difference between "it says uploading" and actually seeing
 # the file change while a backup runs. The agent is a handful of local reads
 # plus two small HTTP calls, which the free 1 GB instance handles easily.
-OnUnitActiveSec=20s
+OnUnitActiveSec=60s
 AccuracySec=5s
 Persistent=false
 

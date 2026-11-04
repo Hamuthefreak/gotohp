@@ -50,6 +50,28 @@ export function remoteStore(env) {
 			return value;
 		},
 
+		// One round trip for several keys. The device heartbeat reads four keys on
+		// every poll, and the site hosting this store allows 10,000 requests a day:
+		// as separate reads those alone would spend the whole allowance.
+		async getMany(keys) {
+			const out = {};
+			const missing = [];
+			for (const key of keys) {
+				const hit = memoised(key);
+				if (hit !== undefined) out[key] = hit;
+				else missing.push(key);
+			}
+			if (!missing.length) return out;
+
+			const body = await call('/api/state/get', { keys: missing });
+			for (const key of missing) {
+				const value = typeof body?.[key] === 'string' ? body[key] : null;
+				memo.set(key, { at: Date.now(), value });
+				out[key] = value;
+			}
+			return out;
+		},
+
 		async set(key, value) {
 			await call('/api/state/set', { key, value });
 			memo.set(key, { at: Date.now(), value });

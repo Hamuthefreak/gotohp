@@ -305,7 +305,9 @@
 
 		<script>
 			const $ = (sel) => document.querySelector(sel);
-			const TICK_MS = 4000;
+			// Matches the relay's own check-in. A faster poll only spent the state
+			// store's daily request allowance, which paused the whole dashboard.
+			const TICK_MS = 60000;
 
 			let data = null; // /api/dashboard
 			let live = {}; // /api/activity
@@ -380,15 +382,30 @@
 				const res = await api('/api/session');
 				const s = (session.info = res.body || {});
 
-				if (!s.configured) {
+				// A failed session is a storage fault, not a missing password: the two
+				// used to be indistinguishable here and sent the owner to fix the wrong
+				// thing.
+				if (!res.ok) {
+					gate(res.body?.detail || res.body?.error || 'The relay state is unavailable right now. Reload in a moment.', null);
+					return;
+				}
+
+				if (s.configured === false) {
 					gate('No dashboard password is set. Add DASHBOARD_PASSWORD and AUTH_SECRET to the deployment, then reload.', null);
 					return;
 				}
 
+				// The store can be paused while the password is perfectly fine, so the
+				// sign-in screen is where that has to be said.
+				const paused = s.state === 'unavailable'
+					? ' The relay\u2019s state store is paused right now, so live data may be missing for a while.'
+					: '';
+
 				if (!s.signedIn) {
-					gate('Sign in to control the relay.', gateButton(s.label || 'Sign in', s.loginUrl || '/api/auth/login'));
+					gate(`Sign in to control the relay.${paused}`, gateButton(s.label || 'Sign in', s.loginUrl || '/api/auth/login'));
 					return;
 				}
+				if (paused) note('The relay\u2019s state store is paused right now, so live data may be missing.', 'warn');
 				if (s.isOwner === false && s.claimable === false) {
 					gate(`Signed in as ${s.email || 'an unknown account'}. This dashboard belongs to another account.`, null);
 					return;
@@ -402,7 +419,7 @@
 				const res = await api('/api/dashboard');
 				if (res.status === 401) return boot();
 				if (res.status === 403) return gate(res.body?.error || 'This dashboard belongs to another account.', null);
-				if (!res.ok) return gate(res.body?.error || 'Could not load the dashboard.', null);
+				if (!res.ok) return gate(res.body?.detail || res.body?.error || 'Could not load the dashboard.', null);
 
 				data = res.body;
 				live = { activity: data.activity, events: data.events, state: data.state, server_time: data.server_time };
@@ -439,7 +456,7 @@
 			function freshestReport(...bundles) {
 				// The agent posts state and activity separately, so "offline" has to be
 				// judged on whichever arrived last. Reading only the activity stamp
-				// called a box offline while it was answering every 20 seconds.
+				// called a box offline while it was answering every 60 seconds.
 				let best = 0;
 				for (const bundle of bundles) {
 					for (const stamp of [bundle?.reported_at, bundle?.server_time]) {
@@ -636,7 +653,7 @@
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ email }),
 				});
-				flash(res.ok ? 'Queued - the relay applies it within 20 seconds.' : res.body?.error || 'That did not work.', !res.ok);
+				flash(res.ok ? 'Queued - the relay applies it within a minute.' : res.body?.error || 'That did not work.', !res.ok);
 			}
 
 			// ------------------------------------------------------------- settings
@@ -729,7 +746,7 @@
 				}
 				data.settings = res.body.settings;
 				dirty = false;
-				note('Saved. The VM picks this up within 20 seconds.', 'good');
+				note('Saved. The VM picks this up within a minute.', 'good');
 				renderSettings();
 				tick();
 			});
@@ -745,7 +762,7 @@
 						body: JSON.stringify({ kind: button.dataset.command }),
 					});
 					button.disabled = false;
-					flash(res.ok ? 'Queued - the VM runs it within 20 seconds.' : res.body?.error || 'Could not queue that.', !res.ok);
+					flash(res.ok ? 'Queued - the VM runs it within a minute.' : res.body?.error || 'Could not queue that.', !res.ok);
 				});
 			}
 
@@ -801,7 +818,7 @@
 				});
 				if (!res.ok) return flash(res.body?.error || 'The relay refused that value.', true);
 				input.value = '';
-				flash('Handed to the relay - it appears above within 20 seconds.');
+				flash('Handed to the relay - it appears above within a minute.');
 			});
 
 			$('#signout').addEventListener('click', async () => {

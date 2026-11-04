@@ -320,8 +320,10 @@ await test('history can be deleted, one entry or all of it, and the relay can cl
 	live = await (await app(req('/api/activity'), {})).json();
 	assert.equal(live.commands.length, 0);
 
-	// Clearing the box's own logs is a command; anything else is refused.
+	// Clearing the box's own logs, and emptying its copies of the library, are
+	// commands; anything else is refused.
 	assert.equal((await app(post('/api/commands', { kind: 'clear-log' }, 'application/json', { origin: ORIGIN }), {})).status, 200);
+	assert.equal((await app(post('/api/commands', { kind: 'delete-files' }, 'application/json', { origin: ORIGIN }), {})).status, 200);
 	assert.equal((await app(post('/api/commands', { kind: 'rm -rf' }, 'application/json', { origin: ORIGIN }), {})).status, 400);
 });
 

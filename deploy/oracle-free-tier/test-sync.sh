@@ -168,6 +168,49 @@ run "$BASE/del.env"
 run "$BASE/del.env"
 ck "--delete passes through when enabled" "grep -q -- '--delete' $FAKE_LOG"
 
+echo "== upload policy flags reach gotohp =="
+cp "$BASE/test.env" "$BASE/full.env"
+cat >>"$BASE/full.env" <<ENVF
+SAVER=true
+USE_QUOTA=true
+FORCE_UPLOAD=true
+DISABLE_FILTER=true
+DATE_FROM_FILENAME=true
+EXCLUDE_PATTERN=@eaDir
+ALBUM=AUTO
+LOG_LEVEL=info
+UPLOAD_INCOMPLETE_LIVE=true
+UPDATE_EXISTING_TO_LIVE=true
+IGNORE_APPLE_METADATA=true
+ENVF
+: >"$FAKE_LOG"
+echo full >"$BASE/repo/2024/07/IMG_0400.HEIC"
+run "$BASE/full.env"
+run "$BASE/full.env"
+ck "every policy flag is passed" "for flag in --saver --use-quota --force --disable-filter --date-from-filename --upload-incomplete-live-photos --update-existing-photos-to-live --ignore-apple-metadata; do grep -q -- \"\$flag\" $FAKE_LOG || exit 1; done"
+ck "album and exclude keep their values" "grep -q -- '--album AUTO' $FAKE_LOG && grep -q -- '--exclude @eaDir' $FAKE_LOG"
+ck "log level is configurable" "grep -q -- '--log-level info' $FAKE_LOG"
+
+echo "== live photo sub-options need pairing =="
+cp "$BASE/test.env" "$BASE/nopair.env"
+cat >>"$BASE/nopair.env" <<ENVF
+PAIR_LIVE_PHOTOS=false
+IGNORE_APPLE_METADATA=true
+ENVF
+: >"$FAKE_LOG"
+echo nopair >"$BASE/repo/2024/07/IMG_0401.HEIC"
+run "$BASE/nopair.env"
+run "$BASE/nopair.env"
+ck "pairing flag absent when disabled" "! grep -q -- '--pair-live-photos' $FAKE_LOG"
+ck "dependent option dropped rather than rejected by gotohp" "! grep -q -- '--ignore-apple-metadata' $FAKE_LOG"
+ck "says why it was dropped" "grep -q 'PAIR_LIVE_PHOTOS is false' $BASE/out"
+
+echo "== a bad log level is refused =="
+cp "$BASE/test.env" "$BASE/badlevel.env"
+echo "LOG_LEVEL=loud" >>"$BASE/badlevel.env"
+run "$BASE/badlevel.env"
+ck "invalid LOG_LEVEL exits 2" "[[ $RC -eq 2 ]] && grep -q LOG_LEVEL $BASE/out"
+
 echo "== guard rails =="
 printf 'SRC_DIR=/nope\nSTATE_DIR=%s/state\nGOTOHP_BIN=%s/fake-gotohp\nGOTOHP_CONFIG=%s/state/gotohp.config\n' \
 	"$BASE" "$BASE" "$BASE" >"$BASE/bad.env"

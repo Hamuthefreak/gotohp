@@ -91,6 +91,8 @@ jobs:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}
           WATERMELON_SFTP_PASSWORD: ${{ secrets.WATERMELON_SFTP_PASSWORD }}
+          CONTROL_URL: ${{ secrets.CONTROL_URL }}
+          CONTROL_DEVICE_TOKEN: ${{ secrets.CONTROL_DEVICE_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -122,22 +124,39 @@ jobs:
             deploy/oracle-free-tier/config.env.example \
             deploy/oracle-free-tier/gotohp-sync.service \
             deploy/oracle-free-tier/gotohp-sync.timer \
+            deploy/oracle-free-tier/control-agent.sh \
+            deploy/oracle-free-tier/gotohp-control.service \
+            deploy/oracle-free-tier/gotohp-control.timer \
             deploy/oracle-free-tier/remote-update.sh \
             "$VM_USER@$VM_HOST:/tmp/gotohp-deploy/"
 
+          # Credentials travel through stdin and land in root-only files, never
+          # on a command line where ps would show them.
+          ship_secret() {
+            printf '%s' "$1" |
+              ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" "umask 077; cat > $2"
+          }
+
+          remote_env=(GOTOHP_DEPLOY=1)
           if [ -n "${WATERMELON_SFTP_PASSWORD:-}" ]; then
-            # Through stdin, never argv: a password on the command line is
-            # visible to every user on the box via ps.
-            printf '%s' "$WATERMELON_SFTP_PASSWORD" |
-              ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
-                'umask 077; cat > /tmp/gotohp-sftp.pass'
-            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
-              'sudo -n env SFTP_PASSWORD_FILE=/tmp/gotohp-sftp.pass bash /tmp/gotohp-deploy/remote-update.sh /tmp/gotohp-deploy'
+            ship_secret "$WATERMELON_SFTP_PASSWORD" /tmp/gotohp-sftp.pass
+            remote_env+=(SFTP_PASSWORD_FILE=/tmp/gotohp-sftp.pass)
           else
             echo "::notice::WATERMELON_SFTP_PASSWORD is not set; the installer will generate one."
-            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
-              'sudo -n bash /tmp/gotohp-deploy/remote-update.sh /tmp/gotohp-deploy'
           fi
+
+          if [ -n "${CONTROL_URL:-}" ]; then
+            ship_secret "$CONTROL_URL" /tmp/gotohp-control.url
+            remote_env+=(CONTROL_URL_FILE=/tmp/gotohp-control.url)
+          fi
+
+          if [ -n "${CONTROL_DEVICE_TOKEN:-}" ]; then
+            ship_secret "$CONTROL_DEVICE_TOKEN" /tmp/gotohp-control.token
+            remote_env+=(CONTROL_TOKEN_SOURCE=/tmp/gotohp-control.token)
+          fi
+
+          ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+            "sudo -n env ${remote_env[*]} bash /tmp/gotohp-deploy/remote-update.sh /tmp/gotohp-deploy"
 
       - name: Add the Google account on its first run
         env:

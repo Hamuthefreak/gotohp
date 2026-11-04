@@ -2,6 +2,10 @@
 
 **Step-by-step setup, from creating the Oracle account: [SETUP.md](SETUP.md).**
 
+> Day-to-day control, including every upload setting and a **Run now**
+> button, is in the [control dashboard](../control-plane/README.md). The relay
+> works without it; it is not required.
+
 ## The short answer
 
 Yes, this works - but not the way the question was phrased. **gotohp is not a

@@ -140,6 +140,8 @@ repository secret*:
 | `WATERMELON_SFTP_PASSWORD` | a password you invent now, 12+ characters | yes |
 | `VM_KNOWN_HOSTS` | `ssh-keyscan -t ed25519 <ip>` output | optional, see below |
 | `GOOGLE_OAUTH_TOKEN` | slower path - see step 5 | optional |
+| `CONTROL_URL` | dashboard origin, from its address bar | optional |
+| `CONTROL_DEVICE_TOKEN` | device token, from the dashboard | optional |
 
 `WATERMELON_SFTP_PASSWORD` is what you will type into the Watermelon app, so
 choose it here once and reuse it there. Nothing else in the system uses it.
@@ -240,6 +242,60 @@ timeout is 12 h and the timer picks up where it left off.
 | What would it do? | `sudo -u gotohpsync env DRY_RUN=true /usr/local/bin/gotohp-sync` |
 | Disk pressure | `df -h / /srv/watermelon` |
 | Forgot the SFTP password | `cat /root/watermelon-sftp-password` (only if you left the secret unset) |
+
+## Control dashboard (optional, public URL, one login)
+
+Everything above works through GitHub Actions. This adds a browser dashboard for
+the day-to-day: change any upload setting, run the relay now, see what it is
+doing. It is public and needs a login, so it is the one part of this setup that
+is reachable from the internet.
+
+**How it fits together.** The VM has no domain and no certificate, so it never
+accepts a connection for this. The dashboard holds the settings, an agent on the
+VM asks for them every minute, applies them and reports state back:
+
+```
+browser -> dashboard (Cloudflare Worker)  <-  relay VM asks, every minute
+```
+
+Nothing new is opened on the instance. The Worker cannot read your Google
+session or your SSH key; neither ever passes through it.
+
+**One-time setup, no shell:**
+
+1. Open the dashboard and click **Sign in with Freebuff**. The first account to
+   sign in claims it; any other account gets 403 from then on. Do this yourself
+   first, before sharing the URL.
+2. Copy the URL from the address bar.
+3. Click **Generate device token** and copy the token (shown once).
+4. Add two repository secrets under Settings -> Secrets and variables -> Actions:
+
+   | Secret | Value |
+   | --- | --- |
+   | `CONTROL_URL` | the dashboard origin, e.g. `https://site-....freebuff.page` |
+   | `CONTROL_DEVICE_TOKEN` | the token from step 3 |
+
+5. Actions -> **Deploy relay to VM** -> **Run workflow**. It writes the URL into
+   `/etc/gotohp-sync/config.env` and the token to
+   `/etc/gotohp-sync/device.token`, both root-only, and enables
+   `gotohp-control.timer`.
+
+Within a minute the dashboard shows real state: files waiting, disk free, next
+run, whether a Google account is configured. Until both secrets exist the agent
+stays dormant and does nothing.
+
+**What you can change from it:** pause and resume, run interval, batch size,
+threads, storage saver, quota counting, force re-upload, date from filename, type
+filter, excluded directories, album (or `AUTO` per folder), account, Live Photo
+pairing and its three sub-options, delete after upload, dry run, log level. Plus
+**Run now**, **Re-scan files** and **Refresh state**.
+
+A change lands within a minute, and the timer is restarted only when the schedule
+itself changed. **Pause** stops the timer without touching files already spooled.
+
+**Where the code lives:** `deploy/control-plane/` (Worker, schema, UI, build) and
+`deploy/oracle-free-tier/control-agent.sh` (the VM side). Adding a control is one
+entry in `src/schema.js`, one flag in `sync.sh`, one check in `test-sync.sh`.
 
 ## 9. When something breaks
 

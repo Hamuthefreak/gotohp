@@ -1,0 +1,28 @@
+// Local development only. Deployment goes through deploy.json; this file exists
+// so `npm run dev` can run the built Worker in workerd with a local D1 database.
+//
+// The client ID below is the *development* one: it is public, and it only works
+// for http://localhost:8787. Never put the deployed client ID here.
+{
+  "name": "gotohp-control",
+  "main": "dist/worker.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist/public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gotohp-control-local",
+      "database_id": "00000000-0000-4000-8000-000000000000"
+    }
+  ],
+  "vars": {
+    "FREEBUFF_CLIENT_ID": "4216980a-6c48-4f24-a5a5-88aef794751c",
+    "FREEBUFF_ISSUER": "https://freebuff.com/oidc",
+    "APP_ORIGIN": "http://localhost:8787",
+    "ALLOW_INSECURE_LOCALHOST": "1"
+  }
+}

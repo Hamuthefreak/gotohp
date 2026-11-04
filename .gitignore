@@ -17,3 +17,6 @@ wails_windows_amd64.syso
 /result-*
 /.direnv
 __pycache__/
+
+# local only, never committed
+.secrets/

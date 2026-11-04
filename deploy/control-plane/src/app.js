@@ -166,12 +166,28 @@ export function createApp(config) {
 		return { user };
 	}
 
-	/** The VM's own credential: no cookie, no session, just the device token. */
+	/**
+	 * The VM's own credential: no cookie, no session, just the device token.
+	 *
+	 * A dashboard whose store has just changed holds no hash yet while the box
+	 * still presents its old token, so the operator can open a pairing window:
+	 * the next device to check in claims the relay. Outside the window nothing is
+	 * accepted, and the window closes as soon as it is used.
+	 */
 	async function device(request) {
 		const token = bearer(request);
 		if (!token) return false;
+
 		const stored = await kget('device_token_hash');
-		return Boolean(stored) && stored === (await sha256(token));
+		if (stored) return stored === (await sha256(token));
+
+		const until = await kget('pairing_open_until');
+		if (!until || !(Date.parse(until) > Date.now())) return false;
+
+		await kset('device_token_hash', await sha256(token));
+		await kset('pairing_open_until', '');
+		await pushEvent('device', 'The relay paired itself');
+		return true;
 	}
 
 	async function pushEvent(kind, message) {
@@ -320,7 +336,7 @@ export function createApp(config) {
 		// Deliberately narrow: this drops history the dashboard keeps, never a
 		// file on the relay and never anything in Google Photos. Emptying the
 		// relay's own logs is a command, because only the box can do that.
-		if ((path === '/api/events' || path.startsWith('/api/events/') || path === '/api/commands') && method === 'DELETE') {
+		if ((path === '/api/events' || path === '/api/commands') && method === 'DELETE') {
 			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
 			const who = await owner(request, env);
 			if (who.error) return who.error;
@@ -334,12 +350,14 @@ export function createApp(config) {
 			}
 
 			const events = await kjson('events', []);
-			if (path === '/api/events') {
+			// One entry is addressed by query rather than by path: Vercel gives each
+			// api/ file exactly one URL, so /api/events/<id> would never reach this
+			// handler there. The query form works on both hosts.
+			const id = str(url.searchParams.get('id'), 40);
+			if (!id) {
 				await ksetjson('events', []);
 				return json({ ok: true, removed: events.length });
 			}
-
-			const id = decodeURIComponent(path.slice('/api/events/'.length));
 			const kept = events.filter((e) => e.id !== id);
 			if (kept.length === events.length) return json({ error: 'no such event' }, 404);
 			await ksetjson('events', kept);
@@ -350,6 +368,17 @@ export function createApp(config) {
 			const who = await owner(request, env);
 			if (who.error) return who.error;
 			return json({ paired: Boolean(await kget('device_token_hash')) });
+		}
+
+		if (path === '/api/device/pair' && method === 'POST') {
+			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
+			const who = await owner(request, env);
+			if (who.error) return who.error;
+
+			const until = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+			await kset('pairing_open_until', until);
+			await pushEvent('device', 'Pairing is open for ten minutes');
+			return json({ ok: true, until });
 		}
 
 		if (path === '/api/device/token' && method === 'POST') {

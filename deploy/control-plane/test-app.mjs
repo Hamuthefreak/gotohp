@@ -198,6 +198,25 @@ await test('device channel: token, poll, activity, commands, results', async () 
 	assert.ok(after.events.some((e) => /run-now.*done/.test(e.message)));
 });
 
+await test('a relay with no stored token pairs itself inside an open window only', async () => {
+	const { app, store } = makeApp();
+	const mine = { authorization: 'Bearer box-token' };
+
+	// Nothing stored and no window: the box is not trusted yet.
+	assert.equal((await app(post('/api/device/poll', 'agent=1\n', 'text/plain', mine), {})).status, 401);
+
+	// Opening the window is a dashboard action, so a foreign origin cannot do it.
+	assert.equal((await app(post('/api/device/pair', {}, 'application/json', { origin: 'https://evil.example' }), {})).status, 403);
+	const opened = await app(post('/api/device/pair', {}, 'application/json', { origin: ORIGIN }), {});
+	assert.equal(opened.status, 200);
+
+	// The next check-in claims the dashboard, and the window then shuts.
+	assert.equal((await app(post('/api/device/poll', 'agent=1\n', 'text/plain', mine), {})).status, 200);
+	assert.ok(store._raw.get('device_token_hash'), 'the presented token was remembered as a hash');
+	assert.equal((await app(post('/api/device/poll', 'agent=1\n', 'text/plain', { authorization: 'Bearer someone-else' }), {})).status, 401);
+	assert.equal((await app(post('/api/device/poll', 'agent=1\n', 'text/plain', mine), {})).status, 200);
+});
+
 await test('accounts: credential is delivered once, selection is a command', async () => {
 	const { app } = makeApp();
 	const issued = await app(post('/api/device/token', {}, 'application/json', { origin: ORIGIN }), {});
@@ -252,13 +271,13 @@ await test('history can be deleted, one entry or all of it, and the relay can cl
 	assert.ok(victim.id, 'every event carries an id so one can be deleted');
 
 	// A foreign origin deletes nothing.
-	assert.equal((await app(req(`/api/events/${victim.id}`, { method: 'DELETE' }), {})).status, 403);
+	assert.equal((await app(req(`/api/events?id=${victim.id}`, { method: 'DELETE' }), {})).status, 403);
 
-	const single = await app(req(`/api/events/${victim.id}`, { method: 'DELETE', headers: { origin: ORIGIN } }), {});
+	const single = await app(req(`/api/events?id=${victim.id}`, { method: 'DELETE', headers: { origin: ORIGIN } }), {});
 	assert.equal(single.status, 200);
 	live = await (await app(req('/api/activity'), {})).json();
 	assert.equal(live.events.some((e) => e.id === victim.id), false);
-	assert.equal((await app(req('/api/events/nosuchid', { method: 'DELETE', headers: { origin: ORIGIN } }), {})).status, 404);
+	assert.equal((await app(req('/api/events?id=nosuchid', { method: 'DELETE', headers: { origin: ORIGIN } }), {})).status, 404);
 
 	const all = await app(req('/api/events', { method: 'DELETE', headers: { origin: ORIGIN } }), {});
 	assert.equal(all.status, 200);

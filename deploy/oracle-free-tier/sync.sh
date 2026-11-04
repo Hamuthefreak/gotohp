@@ -167,6 +167,30 @@ select_settled() {
 		'
 }
 
+# With deletion on, the ledger is the thing that can fill the disk: it is what
+# hides a path from the upload, so a file that was uploaded while deletion was
+# off - or that Watermelon sends again after it was deleted - would never be
+# looked at and would sit there until the node refused new files. Releasing those
+# paths puts them back through the normal gate: gotohp checks Google, sees the
+# file already there, and deletes the local copy. Nothing is removed here; only
+# the bookkeeping is, so a photo can still never be lost to this step.
+release_uploaded_again() {
+	[[ $DELETE_AFTER_UPLOAD == true ]] || return 0
+	[[ -s $LEDGER && -s $CURRENT ]] || return 0
+
+	local released tmp
+	released=$(LC_ALL=C awk -F'\t' 'NR == FNR { onDisk[$3] = 1; next } ($0 in onDisk) { n++ } END { print n + 0 }' \
+		"$CURRENT" "$LEDGER")
+	((released > 0)) || return 0
+
+	tmp=$(mktemp "$STATE_DIR/ledger.XXXXXX") || return 0
+	LC_ALL=C awk -F'\t' 'NR == FNR { onDisk[$3] = 1; next } !($0 in onDisk)' "$CURRENT" "$LEDGER" >"$tmp" &&
+		mv -f "$tmp" "$LEDGER" || rm -f "$tmp"
+
+	log "released $released already-uploaded file(s) that are on disk again; they are checked and removed once Google confirms them"
+	return 0
+}
+
 upload() {
 	local -a cmd=(
 		"$GOTOHP_BIN" upload
@@ -283,6 +307,10 @@ normalize_dates
 write_activity scanning 0 0 "" "scanning the node"
 scan_repo "$CURRENT"
 total_media=$(wc -l <"$CURRENT" | tr -d ' ')
+
+# Before the stability gate, so a released path settles and uploads in this same
+# run when it has been sitting there all along.
+release_uploaded_again
 
 if [[ ! -f $PREVIOUS ]]; then
 	log "first run: found $total_media media file(s); nothing is uploaded until the next pass confirms they are complete"

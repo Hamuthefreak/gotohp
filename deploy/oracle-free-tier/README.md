@@ -190,6 +190,13 @@ Watermelon's next sync would disagree with what is on disk. Keeping it means you
 have two independent copies (node + Google Photos) and a restorable node. Turn
 deletion on only if you accept that the node becomes write-only scratch space.
 
+With it on, the file is removed by gotohp only after Google confirms the upload,
+and a path the ledger already recorded that is on disk again - a file uploaded
+before the switch was on, or one Watermelon re-sent - goes back through the same
+check instead of being skipped, so the disk is freed rather than filled with
+files the relay would otherwise never look at again. The relay itself deletes
+nothing: every removal is gotohp confirming against Google first.
+
 **One account, one pipeline.** `ACCOUNT` in the config pins a stored account;
 running several relays means several service users, which this does not do.
 

@@ -217,14 +217,24 @@ run_as_sync() {
 }
 
 # What the box really holds, read from the CLI rather than from a guess.
+#
+# `creds list` prints a header, then one "  * email" (active) or "    email"
+# line per account, then a usage footer. Only the account lines carry an @, so
+# the email is taken from the line itself instead of a fixed field position -
+# awk fields shift when the marker is absent, which silently reported none.
 accounts_json() {
 	local list
 	list=$("$GOTOHP_BIN" creds list --config "$GOTOHP_CONFIG" 2>/dev/null | awk '
-		/^  ([*]| ) / {
-			email = $3
+		/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/ {
+			line = $0
+			sub(/^[ \t]+/, "", line)
+			selected = (line ~ /^\*/)
+			sub(/^\*[ \t]+/, "", line)
+			email = line
+			sub(/[ \t].*$/, "", email)
 			if (email ~ /@/) {
 				if (n++) printf ","
-				printf "{\"email\":\"%s\",\"selected\":%s}", email, ($2 == "*") ? "true" : "false"
+				printf "{\"email\":\"%s\",\"selected\":%s}", email, selected ? "true" : "false"
 			}
 		}
 	') || list=""
@@ -236,11 +246,30 @@ run_command() {
 
 	case $kind in
 	run-now)
-		if systemctl start --no-block "$SERVICE"; then
+		if ! systemctl start --no-block "$SERVICE"; then
+			message="could not start $SERVICE"
+		else
 			status=ok
 			message="started $SERVICE"
-		else
-			message="could not start $SERVICE"
+			# A run that fails at once (no Google account, bad config) used to
+			# look identical to one that is busy for hours: both said "started".
+			# Give a short run a moment, then report what actually happened.
+			local attempt result
+			for attempt in 1 2 3 4 5 6; do
+				systemctl is-active --quiet "$SERVICE" || break
+				sleep 1
+			done
+			if systemctl is-active --quiet "$SERVICE"; then
+				message="running now"
+			else
+				result=$(systemctl show -p Result --value "$SERVICE" 2>/dev/null)
+				if [[ $result == success ]]; then
+					message="finished: nothing left to upload"
+				else
+					status=fail
+					message="failed: $(journalctl -u "$SERVICE" -n 3 --no-pager -o cat 2>/dev/null | tr '\n' ' ' | tr -s ' ' | tail -c 220)"
+				fi
+			fi
 		fi
 		;;
 	rescan)

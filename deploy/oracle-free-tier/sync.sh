@@ -195,7 +195,23 @@ upload() {
 		[[ $IGNORE_APPLE_METADATA == true ]] && cmd+=(--ignore-apple-metadata)
 	fi
 
-	"${cmd[@]}" -- "$@" >"$LAST_RESULT" 2>>"$GOTOHP_LOG"
+	# Paths come from the scan relative to SRC_DIR, and gotohp-cli stats every
+	# path it is handed. The service runs with no working directory, so a relative
+	# path resolved against / and the whole batch was rejected as an invalid
+	# upload path before a single file was read - an empty last-run.json and a
+	# "batch failed" with no reason. Absolute paths make the upload independent
+	# of wherever the unit happens to start.
+	local -a absolute=()
+	local path
+	for path in "$@"; do
+		if [[ $path == /* ]]; then
+			absolute+=("$path")
+		else
+			absolute+=("$SRC_DIR/$path")
+		fi
+	done
+
+	"${cmd[@]}" -- "${absolute[@]}" >"$LAST_RESULT" 2>>"$GOTOHP_LOG"
 }
 
 mark_uploaded() {
@@ -208,6 +224,10 @@ note_failure() {
 	{
 		printf '=== %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1"
 		cat "$LAST_RESULT" 2>/dev/null || true
+		# The CLI explains itself on stderr, which goes to its own log. Without
+		# these lines the dashboard could only ever say "a batch failed" and
+		# never why, which is exactly the question this file exists to answer.
+		tail -n 4 "$GOTOHP_LOG" 2>/dev/null | sed -e 's/^/    /'
 		printf '\n'
 	} >>"$FAILURES_LOG"
 }

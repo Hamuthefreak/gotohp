@@ -8,7 +8,7 @@ The relay runs on a 1 GB Oracle Always Free instance. That box has no domain, no
 certificate and no business accepting inbound connections, so it never does:
 
 ```
-browser ──▶ dashboard (Worker + D1, or Vercel function + Blob)
+browser ──▶ dashboard (Worker + D1, or Vercel function + Turso)
                     ▲
                     │  the VM asks, every 60 seconds
                     │  (device token, outbound only)
@@ -27,7 +27,7 @@ and both hosts mount it unchanged:
 | Host | Entry | Sign-in | Storage |
 | --- | --- | --- | --- |
 | Cloudflare Worker (Freebuff Sites) | `src/worker.js` | Sign in with Freebuff | D1 (`src/store-d1.js`) |
-| Vercel functions | `api/**` | Sign in with Google | Blob (`src/store-blob.js`) |
+| Vercel functions | `api/**` | Username + password | Turso (`src/store-turso.js`) |
 
 Blob reads use `useCache: false`, so a dashboard that polls every few seconds
 never sees a version cached for up to a minute.
@@ -161,3 +161,37 @@ Until both exist the agent is dormant and exits immediately.
 - It cannot exfiltrate your media. What it reports is counts, disk usage, timer
   state, the current filename and the tail of the uploader's own log.
 - It is not a file browser. Watermelon stays the source of truth for the library.
+
+## Where the state lives
+
+Eleven small JSON strings: `settings`, `commands`, `events`, `activity`, `state`,
+`accounts`, `pending_cred`, `device_token_hash`, `pairing_open_until`,
+`owner_sub` and `owner_email`. Nothing else is stored, and nothing is ever sent
+to Google Photos from here.
+
+The Vercel functions pick a store from the environment, in this order:
+
+| Store | Chosen when | Module |
+| --- | --- | --- |
+| Turso | `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are set | `src/store-turso.js` |
+| D1 via the Sites deployment | `STATE_URL` and `STATE_SECRET` are set | `src/store-remote.js` |
+| Vercel Blob | neither is set (legacy) | `src/store-blob.js` |
+
+The D1 host is the one to move away from: Freebuff Sites pauses the whole site
+once an account reaches 10,000 requests in a day, which takes the dashboard with
+it. Turso's free plan has room for millions of rows a day at this size.
+
+Switching is two variables and a redeploy:
+
+1. At <https://turso.tech>, sign in with GitHub and create a database (any name,
+   region nearest you).
+2. Create a token for it: `turso db tokens create <name>`, or the dashboard's
+   "Create token" button.
+3. In Vercel -> the project -> Settings -> Environment Variables, add
+   `TURSO_DATABASE_URL` (the `libsql://...` URL) and `TURSO_AUTH_TOKEN`, in
+   Production and Preview.
+4. Redeploy.
+
+No SQL is needed: the store creates its `kv` table on first use. Keys missing
+from Turso are seeded once from the previous store, so the device pairing hash
+and the stored accounts survive the move.

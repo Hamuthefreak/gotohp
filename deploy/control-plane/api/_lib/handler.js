@@ -8,20 +8,23 @@ import { createApp } from '../../src/app.js';
 import { createPasswordAuth } from '../../src/auth-password.js';
 import { blobStore } from '../../src/store-blob.js';
 import { remoteStore } from '../../src/store-remote.js';
+import { tursoStore } from '../../src/store-turso.js';
 
 let cached;
 
 function build(env, origin) {
 	// The store choice is part of the cache key: an instance that cached a
 	// Blob-backed app must not keep answering after the switch to D1.
-	const backend = env.STATE_URL && env.STATE_SECRET ? 'd1' : 'blob';
+	const legacy = env.STATE_URL && env.STATE_SECRET ? remoteStore(env) : null;
+	const backend = env.TURSO_DATABASE_URL && env.TURSO_AUTH_TOKEN ? 'turso' : legacy ? 'd1' : 'blob';
 	if (cached && cached.origin === origin && cached.backend === backend) return cached;
 	const auth = createPasswordAuth(env, origin);
 	const routes = createApp({
-		// D1 through the Sites deployment when it is configured; Blob only as a
-		// fallback for a deployment that predates it (its free quota is too small
-		// for this relay's polling).
-		store: env.STATE_URL && env.STATE_SECRET ? remoteStore(env) : blobStore(env),
+		// Turso when it is configured, otherwise D1 through the Sites deployment,
+		// otherwise Blob. Whichever is older is still handed to the newer one as an
+		// import source, so switching stores keeps the device pairing and the
+		// stored accounts instead of needing them entered again.
+		store: backend === 'turso' ? tursoStore(env, { importFrom: legacy }) : (legacy || blobStore(env)),
 		origin,
 		sameOrigin: (request) => {
 			const site = request.headers.get('origin');

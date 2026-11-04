@@ -1,22 +1,56 @@
 # gotohp relay control plane
 
-A public dashboard for a private backup relay. Sign in with Freebuff, change
-every upload setting, run the relay on demand, and see what it is doing.
+A public dashboard for a private backup relay. Sign in with Google, change every
+upload setting, run the relay on demand, and watch what it is doing **while it
+runs**.
 
 The relay runs on a 1 GB Oracle Always Free instance. That box has no domain, no
 certificate and no business accepting inbound connections, so it never does:
 
 ```
-browser ──▶ dashboard (Cloudflare Worker + D1)
+browser ──▶ dashboard (Worker + D1, or Vercel function + Blob)
                     ▲
-                    │  the VM asks, every minute
+                    │  the VM asks, every 20 seconds
                     │  (device token, outbound only)
               relay VM ──▶ Google Photos
 ```
 
-The VM pulls settings and commands from the Worker and reports state back. No
-port is opened on the instance, no TLS has to be terminated there, and the
-Worker holds nothing worth stealing except the settings.
+The VM pulls settings and commands from the dashboard and pushes back what it is
+doing. No port is opened on the instance, no TLS has to be terminated there, and
+the dashboard holds nothing worth stealing except the settings.
+
+## Two hosts, one app
+
+`src/app.js` is the whole HTTP surface, written against Web `Request`/`Response`,
+and both hosts mount it unchanged:
+
+| Host | Entry | Sign-in | Storage |
+| --- | --- | --- | --- |
+| Cloudflare Worker (Freebuff Sites) | `src/worker.js` | Sign in with Freebuff | D1 (`src/store-d1.js`) |
+| Vercel functions | `api/**` | Sign in with Google | Blob (`src/store-blob.js`) |
+
+Blob reads use `useCache: false`, so a dashboard that polls every few seconds
+never sees a version cached for up to a minute.
+
+## Live activity
+
+The relay used to report only its last finished run, which made the dashboard a
+photograph. Now every run leaves a small JSON file behind:
+
+```json
+{ "phase": "uploading", "total": 312, "uploaded": 47, "current": "2024/07/IMG_0421.HEIC",
+  "batch": 2, "batches": 4, "started_at": "...", "exit": null }
+```
+
+`sync.sh` rewrites it as the run moves (scanning → uploading → idle, or error),
+and `control-agent.sh` ships it plus the last six lines of the CLI log every 20
+seconds. The Worker keeps the last few dozen transitions as a feed, so the page
+can show "Uploading 47 of 312 · now: IMG_0421.HEIC · batch 2/4" and a scrolling
+history instead of a stale counter.
+
+Polling is 20 seconds, not realtime: it costs two tiny HTTP calls per tick and
+survives the box going away for a while. The page itself refreshes every four
+seconds and pauses while the tab is hidden.
 
 ## What it can change
 
@@ -32,20 +66,50 @@ Every column of the relay's behaviour, from `src/schema.js`:
 
 Plus actions: **Run now**, **Re-scan files**, **Refresh state**.
 
-Changing a setting writes one key in D1. The agent picks it up within a minute,
+Changing a setting writes one key. The agent picks it up within 20 seconds,
 rewrites `/etc/gotohp-sync/config.env` in place, and restarts the timer only if
 the schedule actually changed.
 
 ## Login and ownership
 
-Sign-in is Freebuff's. The **first account to open the dashboard claims it**;
-every other account gets 403 from then on. That is deliberate: the relay has one
-operator, and a claimed dashboard cannot be taken over by whoever finds the URL.
-Settings, state and the device token all live behind that check, on the server,
-not in the browser.
+The **first account to open the dashboard claims it**; every other account gets
+403 from then on. That keeps the relay to a single operator, and a claimed
+dashboard cannot be taken over by whoever finds the URL. Settings, live activity
+and the device token all live behind that check, on the server, never in the
+browser.
 
-The device token is shown once and stored only as a SHA-256 hash. Rotating it
-invalidates the old one immediately.
+The device token is shown once and stored only as a SHA-256 hash.
+
+## Vercel deployment
+
+Already provisioned: project `gotohp-relay`, a private Blob store `gotohp-live`
+(bound as `BLOB_READ_WRITE_TOKEN`), and the environment variables `APP_ORIGIN`,
+`AUTH_SECRET`, `ALLOWED_EMAIL`.
+
+Sign-in with Google needs an OAuth client of your own, which only you can create:
+
+1. <https://console.cloud.google.com/apis/credentials> → **Create credentials** →
+   **OAuth client ID** → type **Web application**.
+2. Authorised redirect URI: `https://gotohp-relay.vercel.app/api/auth/callback`
+3. Add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to the Vercel project
+   (Settings → Environment Variables), then redeploy.
+
+Until those two exist the dashboard shows a setup card instead of a login form.
+`ALLOWED_EMAIL` is the only address accepted; leave it unset to let the first
+Google account claim the dashboard.
+
+Deploy from this directory:
+
+```sh
+npx vercel deploy --prod
+```
+
+## Cloudflare (Freebuff Sites) deployment
+
+`deploy.json` is the Sites manifest. Deployment injects `FREEBUFF_CLIENT_ID`,
+`FREEBUFF_ISSUER` and `APP_ORIGIN`, and attaches the `DB` D1 database. There is
+no secret to set on the Worker: the client ID and origin are public
+configuration.
 
 ## Adding a control
 
@@ -59,20 +123,13 @@ The form, the API validation and the agent's own validation all come from step 1
 
 ```sh
 npm install
-npm run build        # dist/worker.js + dist/public
+npm test             # route tests for src/app.js, no runtime needed
+npm run build        # dist/worker.js + dist/public, for Sites
 npm run dev          # http://localhost:8787, local D1, development client ID
 ```
 
 The development client ID in `wrangler.jsonc` is public and only valid for
-`http://localhost:8787`. `ALLOW_INSECURE_LOCALHOST=1` exists only there; a
-deployed environment is https and never sets it.
-
-## Deploy
-
-`deploy.json` is the Sites manifest. Deployment also injects
-`FREEBUFF_CLIENT_ID`, `FREEBUFF_ISSUER` and `APP_ORIGIN`, and attaches the `DB`
-D1 database. There is no secret to set on the Worker: the client ID and origin
-are public configuration.
+`http://localhost:8787`.
 
 ## Pair the VM
 
@@ -87,6 +144,6 @@ Until both exist the agent is dormant and exits immediately.
 ## What this deliberately does not do
 
 - It cannot read your Google session or the SSH key; neither passes through it.
-- It cannot exfiltrate your media. The only data reported is counts, disk usage,
-  timer state and the last run summary.
+- It cannot exfiltrate your media. What it reports is counts, disk usage, timer
+  state, the current filename and the tail of the uploader's own log.
 - It is not a file browser. Watermelon stays the source of truth for the library.

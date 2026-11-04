@@ -69,6 +69,27 @@ collect_state() {
 }
 
 # ---------------------------------------------------------------------------
+# activity: the sync run leaves a small JSON file behind, and the last few CLI
+# lines next to it. Shipping both is what makes the dashboard live rather than
+# a snapshot of the last finished run.
+# ---------------------------------------------------------------------------
+json_text() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\010\013\014\016-\037'
+}
+
+activity_payload() {
+	local activity="{}" log_lines=""
+	if [[ -r $STATE_DIR/activity.json ]]; then
+		activity=$(cat "$STATE_DIR/activity.json" 2>/dev/null) || activity="{}"
+		[[ $activity == \{* ]] || activity="{}"
+	fi
+	if [[ -r $STATE_DIR/gotohp.log ]]; then
+		log_lines=$(tail -n 6 "$STATE_DIR/gotohp.log" 2>/dev/null | tail -c 700) || log_lines=""
+	fi
+	printf '{"activity":%s,"log":"%s"}' "$activity" "$(json_text "$log_lines")"
+}
+
+# ---------------------------------------------------------------------------
 # validation: the dashboard already checked these, but this file is sourced by
 # a root shell, so it does not trust the network.
 # ---------------------------------------------------------------------------
@@ -218,6 +239,12 @@ response=$(curl -fsS --max-time 25 -X POST "$CONTROL_URL/api/device/poll" \
 	log "could not reach the control plane; will retry"
 	exit 0
 }
+
+curl -fsS --max-time 10 -X POST "$CONTROL_URL/api/device/activity" \
+	-H "Authorization: Bearer $TOKEN" \
+	-H 'content-type: application/json' \
+	--data-binary "$(activity_payload)" >/dev/null 2>&1 ||
+	log "could not report live activity"
 
 parse_response <<<"$response"
 

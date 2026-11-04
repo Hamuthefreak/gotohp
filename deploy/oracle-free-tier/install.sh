@@ -7,7 +7,8 @@
 # What it sets up:
 #   * a nologin system user `gotohpsync` that owns the ledger and credentials
 #   * an SFTP-only, chrooted user `watermelon` that Watermelon Backup writes to
-#   * /usr/local/bin/gotohp-cli, /usr/local/bin/gotohp-sync
+#   * /usr/local/bin/gotohp-cli, /usr/local/bin/gotohp-sync,
+#     /usr/local/bin/gotohp-media-date
 #   * /etc/gotohp-sync/config.env
 #   * gotohp-sync.service + gotohp-sync.timer, timer enabled
 #
@@ -99,6 +100,9 @@ install -m 0755 -o root -g root "$BIN" /usr/local/bin/gotohp-cli
 install -m 0755 -o root -g root "$HERE/sync.sh" /usr/local/bin/gotohp-sync
 if [[ -f $HERE/control-agent.sh ]]; then
 	install -m 0755 -o root -g root "$HERE/control-agent.sh" /usr/local/bin/gotohp-control
+fi
+if [[ -f $HERE/media-date.py ]]; then
+	install -m 0755 -o root -g root "$HERE/media-date.py" /usr/local/bin/gotohp-media-date
 fi
 
 say "installing configuration"

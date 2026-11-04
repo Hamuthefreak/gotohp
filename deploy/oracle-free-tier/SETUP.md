@@ -210,14 +210,22 @@ it prints.
 ## 7. Prove the date before the whole library
 
 gotohp takes a photo's Google Photos date from the file **mtime** (`--date-from-filename`
-does nothing for `IMG_1234` names), and whether Watermelon preserves capture time
-over SFTP is the one thing that could not be verified from here. So:
+does nothing for `IMG_1234` names), and SFTP does not reliably carry capture
+time over. So before every scan `sync.sh` sets mtime from the date stored in the
+file itself (`media-date.py`: EXIF `DateTimeOriginal`, the movie header for
+videos, an EXIF-shaped date string as a fallback for HEIC and RAW), and only for
+files that have not been uploaded yet. That also makes the date stable, which is
+what the quiet-interval gate depends on.
+
+Worth proving on one month first, because a container it cannot parse keeps the
+arrival time:
 
 1. Back up **one month only** in Watermelon.
 2. Wait for two timer runs (~20 minutes). The first run only takes a snapshot;
    the second uploads, because a file must stop changing first.
-3. Look at one photo in Google Photos. **2019 = correct.** Today's date = stop,
-   and tell me: the fix belongs in `sync.sh`, not in Google Photos.
+3. Look at one photo in Google Photos. **2019 = correct.** Today's date = that
+   file carries no date it recognises; tell me which one and `media-date.py`
+   grows a reader for it.
 
 Only then start the full backup. A first full push can take hours; the service
 timeout is 12 h and the timer picks up where it left off.
@@ -315,7 +323,7 @@ entry in `src/schema.js`, one flag in `sync.sh`, one check in `test-sync.sh`.
 | `the new binary does not run on this host` | wrong architecture shipped | check `uname -m` via *Run a command*; report it |
 | `sshd rejected the drop-in` | sshd config conflict | nothing was changed; read the log, `sshd -t` on the box |
 | Timer `active` but nothing uploads | no Google account, or files still changing | check `creds list`, then `last-run.json` |
-| Photos dated today | mtime is the upload time | see step 7, stop and report |
+| Photos dated today | the file carried no date `media-date.py` recognises, so mtime is still the arrival time | extend `media-date.py`, or check `journalctl` for the `dated N of M` line |
 | Instance stopped itself after a week | idle reclamation | upgrade to Pay As You Go (step 2.2) |
 | `No space left on device` | library > boot volume | set `DELETE_AFTER_UPLOAD=true` in `/etc/gotohp-sync/config.env` and relay one month at a time |
 

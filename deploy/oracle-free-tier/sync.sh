@@ -45,6 +45,7 @@ BATCH_SIZE=${BATCH_SIZE:-200}
 DELETE_AFTER_UPLOAD=${DELETE_AFTER_UPLOAD:-false}
 PAIR_LIVE_PHOTOS=${PAIR_LIVE_PHOTOS:-true}
 DRY_RUN=${DRY_RUN:-false}
+NORMALIZE_DATES=${NORMALIZE_DATES:-true}
 
 # Mirrors the upload flags of gotohp-cli. The dashboard writes these; every one
 # is optional and defaults to the behaviour the relay shipped with.
@@ -133,19 +134,20 @@ MEDIA_EXTS=(
 	mod mov mp4 mpg mpeg mts tod wmv ts webm
 )
 
+# One find expression for media files, shared by the scan and the date pass so
+# the two can never disagree about what they are looking at.
+MEDIA_FIND=(-iname "*.${MEDIA_EXTS[0]}")
+for _ext in "${MEDIA_EXTS[@]:1}"; do
+	MEDIA_FIND+=(-o -iname "*.$_ext")
+done
+unset _ext
+
 # scan_repo <outfile>
 # Emits "size<TAB>mtime<TAB>relative/path" for every media file in SRC_DIR.
 scan_repo() {
 	local out=$1
-	local -a names=()
-	local ext
 
-	names+=(-iname "*.${MEDIA_EXTS[0]}")
-	for ext in "${MEDIA_EXTS[@]:1}"; do
-		names+=(-o -iname "*.$ext")
-	done
-
-	find "$SRC_DIR" -type f \( "${names[@]}" \) -printf '%s\t%T@\t%P\n' |
+	find "$SRC_DIR" -type f \( "${MEDIA_FIND[@]}" \) -printf '%s\t%T@\t%P\n' |
 		LC_ALL=C sort -t$'\t' -k3 >"$out.part"
 	mv "$out.part" "$out"
 }
@@ -210,6 +212,54 @@ note_failure() {
 	} >>"$FAILURES_LOG"
 }
 
+# gotohp dates an upload from the file's mtime (core/upload.go), and SFTP does
+# not reliably carry the capture time over. A node that arrived stamped with the
+# transfer time would put the whole library under "today" in Google Photos, so
+# mtime is corrected from the date stored in the file itself before the scan.
+# The stability gate below then works on the corrected value, which is what makes
+# the upload date stable rather than the arrival order.
+normalize_dates() {
+	[[ $NORMALIZE_DATES == true ]] || return 0
+	[[ $DRY_RUN != true ]] || return 0
+
+	local helper=${MEDIA_DATE_HELPER:-} candidate
+	if [[ -z $helper ]]; then
+		for candidate in "$(dirname -- "${BASH_SOURCE[0]}")/media-date.py" \
+			/usr/local/bin/gotohp-media-date; do
+			if [[ -r $candidate ]]; then
+				helper=$candidate
+				break
+			fi
+		done
+	fi
+	if [[ -z $helper ]]; then
+		warn "no media-date helper; uploads keep the mtime they arrived with"
+		return 0
+	fi
+	if ! command -v python3 >/dev/null 2>&1; then
+		warn "python3 is missing; uploads keep the mtime they arrived with"
+		return 0
+	fi
+
+	# Only files that have not been uploaded: already sent files keep whatever
+	# date they were sent with, and a large library does not get re-read.
+	local summary
+	summary=$(
+		find "$SRC_DIR" -type f \( "${MEDIA_FIND[@]}" \) -print0 2>/dev/null |
+			awk -v RS='\0' -v ORS='\0' -v root="$SRC_DIR/" -v done="$LEDGER" '
+				BEGIN { while ((getline line < done) > 0) seen[line] = 1 }
+				{
+					rel = substr($0, length(root) + 1)
+					if (!(rel in seen)) print $0
+				}
+			' |
+			python3 "$helper" 2>&1 >/dev/null
+	) || summary=""
+	[[ -n $summary ]] && log "$summary"
+	return 0
+}
+
+normalize_dates
 write_activity scanning 0 0 "" "scanning the node"
 scan_repo "$CURRENT"
 total_media=$(wc -l <"$CURRENT" | tr -d ' ')

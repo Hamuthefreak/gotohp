@@ -8,7 +8,7 @@
 		"build": "node build.mjs",
 		"dev": "wrangler dev --config wrangler.jsonc --port 8787 --ip 127.0.0.1",
 		"start": "npm run build && npm run dev",
-		"test": "node test-app.mjs"
+		"test": "node test-app.mjs && node test-store-turso.mjs"
 	},
 	"dependencies": {
 		"@freebuff/auth": "^0.1.0",

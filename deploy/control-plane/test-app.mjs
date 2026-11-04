@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 
 import { createApp } from './src/app.js';
+import { createPasswordAuth } from './src/auth-password.js';
 import { defaults, SETTINGS } from './src/schema.js';
 
 const ORIGIN = 'https://relay.example';
@@ -85,6 +86,31 @@ await test('the first account claims the dashboard and a second is refused', asy
 	const other = await build({ sub: 'b', email: 'b@x' })(req('/api/dashboard'), {});
 	assert.equal(other.status, 403);
 	assert.equal(store._raw.get('owner_sub'), 'a');
+});
+
+await test('the password login is the owner even after another account claimed it', async () => {
+	const store = memoryStore();
+	const build = (user) =>
+		createApp({
+			store,
+			origin: ORIGIN,
+			sameOrigin: () => true,
+			auth: { getUser: async () => user },
+		});
+
+	// An identity-provider account got there first, which is what left the
+	// password account locked out with "signed in as operator".
+	await build({ sub: 'google-oauth2|99', email: 'someone@example.com' })(req('/api/dashboard'), {});
+	assert.equal(store._raw.get('owner_sub'), 'google-oauth2|99');
+
+	const operator = build({ sub: 'operator', email: 'hamu' });
+	assert.equal((await operator(req('/api/dashboard'), {})).status, 200);
+	const session = await (await operator(req('/api/session'), {})).json();
+	assert.equal(session.isOwner, true);
+	assert.equal(session.email, 'hamu');
+
+	// A second identity-provider account is still refused.
+	assert.equal((await build({ sub: 'b', email: 'b@x' })(req('/api/dashboard'), {})).status, 403);
 });
 
 await test('dashboard carries every setting, the schema and a server timestamp', async () => {
@@ -300,6 +326,43 @@ await test('unknown api paths 404, everything else falls through to static asset
 	const { app } = makeApp();
 	assert.equal((await app(req('/api/nope'), {})).status, 404);
 	assert.equal(await app(req('/'), {}), null);
+});
+
+await test('the dashboard password signs in with a username and owns the dashboard', async () => {
+	const env = { DASHBOARD_PASSWORD: 'correct-horse', AUTH_SECRET: 'signing-key' };
+	const auth = createPasswordAuth(env, ORIGIN);
+
+	const login = await auth.handle(req('/api/auth/login'));
+	assert.equal(login.status, 200);
+	assert.match(await login.text(), /name="username" value="hamu"/);
+
+	const signIn = (username, password) =>
+		auth.handle(
+			req('/api/auth/login', {
+				method: 'POST',
+				headers: { 'content-type': 'application/x-www-form-urlencoded' },
+				body: new URLSearchParams({ username, password }).toString(),
+			}),
+		);
+
+	// The username is part of the credential: knowing the password is not enough.
+	assert.equal((await signIn('someone', 'correct-horse')).status, 401);
+	assert.equal((await signIn('hamu', 'wrong')).status, 401);
+
+	const ok = await signIn('Hamu', 'correct-horse');
+	assert.equal(ok.status, 303);
+	const cookie = ok.headers.get('set-cookie').split(';')[0];
+	assert.match(cookie, /^gthp_session=/);
+
+	// The cookie alone is enough to be treated as the owner, with no account
+	// claiming the dashboard first.
+	const app = createApp({ store: memoryStore(), origin: ORIGIN, sameOrigin: () => true, auth });
+	const signedIn = (path) => app(req(path, { headers: { cookie } }), env);
+	const session = await (await signedIn('/api/session')).json();
+	assert.equal(session.signedIn, true);
+	assert.equal(session.email, 'hamu');
+	assert.equal(session.isOwner, true);
+	assert.equal((await signedIn('/api/dashboard')).status, 200);
 });
 
 // ---------------------------------------------------------------------------

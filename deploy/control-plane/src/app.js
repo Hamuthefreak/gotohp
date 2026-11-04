@@ -133,6 +133,10 @@ function normalizeActivity(raw) {
 export function createApp(config) {
 	const { store, auth, sameOrigin } = config;
 
+	// The subject the dashboard password login issues. There is exactly one, so
+	// it is always the owner; identity-provider accounts still claim on first use.
+	const LOCAL_SUB = 'operator';
+
 	const kget = (key) => store.get(key);
 	const kset = (key, value) => store.set(key, value);
 
@@ -155,6 +159,11 @@ export function createApp(config) {
 	async function owner(request, env) {
 		const user = await auth.getUser(request, env);
 		if (!user) return { error: json({ error: 'sign in required' }, 401) };
+
+		// The password login has exactly one account, so whoever holds the
+		// password is the owner. Only identity-provider accounts race for the
+		// first claim, which keeps the D1 state API closed on the public host.
+		if (user.sub === LOCAL_SUB) return { user };
 
 		let ownerSub = await kget('owner_sub');
 		if (!ownerSub) {
@@ -237,7 +246,7 @@ export function createApp(config) {
 			return json({
 				signedIn: Boolean(user),
 				email: user?.email || '',
-				isOwner: Boolean(user && ownerSub === user.sub),
+				isOwner: Boolean(user && (user.sub === LOCAL_SUB || ownerSub === user.sub)),
 				claimable: Boolean(user && !ownerSub),
 				loginUrl: auth.loginUrl || null,
 				signoutUrl: auth.signoutUrl || null,

@@ -7,6 +7,7 @@
 // the server never has to store a session.
 //
 // Required environment: DASHBOARD_PASSWORD, AUTH_SECRET.
+// Optional: DASHBOARD_USER, the username to type alongside it (default "hamu").
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 const SESSION_COOKIE = 'gthp_session';
@@ -56,14 +57,20 @@ const PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content
 </style>
 <form method="post" action="/api/auth/login">
   <h1>gotohp relay</h1>
-  <p>Enter the dashboard password.</p>
+  <p>Sign in with your username and password.</p>
   {{ERROR}}
-  <input type="password" name="password" autocomplete="current-password" autofocus required />
+  <input type="text" name="username" value="{{USER}}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus />
+  <input type="password" name="password" autocomplete="current-password" required />
   <button type="submit">Sign in</button>
 </form>`;
 
-function page(status, error = '') {
-	return new Response(PAGE.replace('{{ERROR}}', error ? `<p class="err">${error}</p>` : ''), {
+function escapeHtml(value) {
+	return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function page(username, status, error = '') {
+	const body = PAGE.replaceAll('{{USER}}', escapeHtml(username)).replace('{{ERROR}}', error ? `<p class="err">${error}</p>` : '');
+	return new Response(body, {
 		status,
 		headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
 	});
@@ -76,6 +83,7 @@ function page(status, error = '') {
 export function createPasswordAuth(env, origin) {
 	const password = env.DASHBOARD_PASSWORD || '';
 	const secret = env.AUTH_SECRET || '';
+	const username = (env.DASHBOARD_USER || 'hamu').trim() || 'hamu';
 	const configured = Boolean(password && secret);
 	const secure = origin.startsWith('https://');
 
@@ -93,7 +101,7 @@ export function createPasswordAuth(env, origin) {
 		try {
 			const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
 			if (!data || !data.exp || data.exp < Math.floor(Date.now() / 1000)) return null;
-			return { sub: 'operator', email: env.DASHBOARD_NAME || 'operator' };
+			return { sub: 'operator', email: username };
 		} catch {
 			return null;
 		}
@@ -117,17 +125,20 @@ export function createPasswordAuth(env, origin) {
 			const url = new URL(request.url);
 
 			if (url.pathname === '/api/auth/login' && request.method === 'GET') {
-				if (!configured) return page(503, 'Set DASHBOARD_PASSWORD and AUTH_SECRET on the deployment, then reload.');
-				return page(200);
+				if (!configured) return page(username, 503, 'Set DASHBOARD_PASSWORD and AUTH_SECRET on the deployment, then reload.');
+				return page(username, 200);
 			}
 
 			if (url.pathname === '/api/auth/login' && request.method === 'POST') {
-				if (!configured) return page(503, 'Set DASHBOARD_PASSWORD and AUTH_SECRET on the deployment, then reload.');
+				if (!configured) return page(username, 503, 'Set DASHBOARD_PASSWORD and AUTH_SECRET on the deployment, then reload.');
 
-				const supplied = new URLSearchParams(await request.text()).get('password') || '';
-				const given = digest(supplied);
+				const form = new URLSearchParams(await request.text());
+				// One account, so the username is only a label to type: it still has to
+				// match, or a leaked password alone would be enough.
+				const named = (form.get('username') || '').trim().toLowerCase() === username.toLowerCase();
+				const given = digest(form.get('password') || '');
 				const expected = digest(password);
-				if (!timingSafeEqual(given, expected)) return page(401, 'Wrong password.');
+				if (!named || !timingSafeEqual(given, expected)) return page(username, 401, 'Wrong username or password.');
 				return new Response(null, { status: 303, headers: { location: '/', 'set-cookie': sessionCookie() } });
 			}
 

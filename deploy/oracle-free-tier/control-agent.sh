@@ -286,6 +286,20 @@ run_command() {
 		status=ok
 		message="state refreshed"
 		;;
+	clear-log)
+		# "Clear the errors" means the relay's own logs and nothing else: no file
+		# under SRC_DIR is touched and nothing is deleted from Google Photos.
+		# truncate keeps the owner, so the sync user can still write afterwards.
+		local cleared=0 file
+		for file in "$STATE_DIR/gotohp.log" "$STATE_DIR/failures.log"; do
+			[[ -f $file ]] || continue
+			if truncate -s 0 "$file" 2>/dev/null; then
+				cleared=$((cleared + 1))
+			fi
+		done
+		status=ok
+		message="cleared $cleared log file(s)"
+		;;
 	creds-set)
 		if [[ -z $arg ]]; then
 			message="no account given"

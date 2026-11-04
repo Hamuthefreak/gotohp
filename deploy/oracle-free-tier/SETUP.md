@@ -337,7 +337,10 @@ Upgrading to Pay As You Go is the documented cure and keeps the free shapes free
 purpose (deleting inside a node corrupts Watermelon's manifests and breaks
 restore-from-node). For a library larger than the disk, turn
 `DELETE_AFTER_UPLOAD=true` on and accept that the node becomes write-only
-scratch space.
+scratch space. Files are only removed after Google confirms the upload, and a
+file that arrives again after being deleted is checked against Google rather
+than skipped, so the node keeps draining instead of filling with paths the
+ledger already knew.
 
 **Port 22 is open to the world.** Watermelon needs it, so it stays. Long random
 password, and consider restricting the source to your carrier's ranges or

@@ -196,7 +196,33 @@ run "$BASE/del.env"
 run "$BASE/del.env"
 ck "--delete passes through when enabled" "grep -q -- '--delete' $FAKE_LOG"
 
-echo "== upload policy flags reach gotohp =="
+echo "== deletion also frees what the ledger was hiding =="
+mkdir -p "$BASE/repo2/2024/09" "$BASE/state2" "$BASE/state3"
+echo freed >"$BASE/repo2/2024/09/IMG_0600.JPG"
+printf '2024/09/IMG_0600.JPG\n' >"$BASE/state2/uploaded.tsv"
+cat >"$BASE/free.env" <<ENV
+SRC_DIR=$BASE/repo2
+STATE_DIR=$BASE/state2
+GOTOHP_BIN=$BASE/fake-gotohp
+GOTOHP_CONFIG=$BASE/state/gotohp.config
+BATCH_SIZE=50
+DELETE_AFTER_UPLOAD=true
+ENV
+sed "s|$BASE/state2|$BASE/state3|" "$BASE/free.env" >"$BASE/keep.env"
+echo "DELETE_AFTER_UPLOAD=false" >>"$BASE/keep.env"
+printf '2024/09/IMG_0600.JPG\n' >"$BASE/state3/uploaded.tsv"
+: >"$FAKE_LOG"
+run "$BASE/keep.env"
+ck "deletion off leaves the ledger alone" "grep -q IMG_0600 $BASE/state3/uploaded.tsv"
+ck "deletion off uploads nothing again" "[[ $(calls) -eq 0 ]]"
+run "$BASE/free.env"
+ck "deletion on releases the path the ledger was hiding" "! grep -q IMG_0600 $BASE/state2/uploaded.tsv"
+ck "says how many it released" "grep -q 'released 1 already-uploaded' $BASE/out"
+ck "the file itself is never deleted by the relay" "[[ -f $BASE/repo2/2024/09/IMG_0600.JPG ]]"
+run "$BASE/free.env"
+ck "the released file goes back through the upload with --delete" "grep -q IMG_0600.JPG $FAKE_LOG && grep -q -- '--delete' $FAKE_LOG"
+
+ echo "== upload policy flags reach gotohp =="
 cp "$BASE/test.env" "$BASE/full.env"
 cat >>"$BASE/full.env" <<ENVF
 SAVER=true

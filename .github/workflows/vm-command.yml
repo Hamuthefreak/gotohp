@@ -1,0 +1,80 @@
+name: Run a command on the relay VM
+
+# Operator tool: runs one shell command on the relay VM over SSH and prints the
+# result in the job log. For everything a deploy should not do - read the
+# journal, restart a stuck run, check disk. Uses the same VM_HOST / VM_USER /
+# VM_SSH_KEY secrets as the deploy workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Shell command to run on the relay VM
+        required: true
+        type: string
+      as_root:
+        description: Run it as root (sudo -n)
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run on the VM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare SSH
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          for name in VM_HOST VM_USER VM_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::repository secret $name is missing - see deploy/oracle-free-tier/SETUP.md"
+              exit 1
+            fi
+          done
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VM_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          if [ -n "$VM_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$VM_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+            echo "SSH_HOST_KEY_CHECK=yes" >> "$GITHUB_ENV"
+          else
+            : > "$HOME/.ssh/known_hosts"
+            echo "SSH_HOST_KEY_CHECK=accept-new" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run
+        env:
+          COMMAND: ${{ inputs.command }}
+          AS_ROOT: ${{ inputs.as_root }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking="$SSH_HOST_KEY_CHECK"
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+
+          echo "+ $COMMAND"
+          if [ "$AS_ROOT" = "true" ]; then
+            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" \
+              "sudo -n bash -lc $(printf '%q' "$COMMAND")"
+          else
+            ssh "${ssh_opts[@]}" "$VM_USER@$VM_HOST" "$COMMAND"
+          fi

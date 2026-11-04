@@ -133,6 +133,10 @@ function normalizeActivity(raw) {
 export function createApp(config) {
 	const { store, auth, sameOrigin } = config;
 
+	// The subject the dashboard password login issues. There is exactly one, so
+	// it is always the owner; identity-provider accounts still claim on first use.
+	const LOCAL_SUB = 'operator';
+
 	const kget = (key) => store.get(key);
 	const kset = (key, value) => store.set(key, value);
 

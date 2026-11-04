@@ -10,7 +10,7 @@ certificate and no business accepting inbound connections, so it never does:
 ```
 browser ──▶ dashboard (Worker + D1, or Vercel function + Blob)
                     ▲
-                    │  the VM asks, every 20 seconds
+                    │  the VM asks, every 60 seconds
                     │  (device token, outbound only)
               relay VM ──▶ Google Photos
 ```
@@ -48,7 +48,7 @@ seconds. The Worker keeps the last few dozen transitions as a feed, so the page
 can show "Uploading 47 of 312 · now: IMG_0421.HEIC · batch 2/4" and a scrolling
 history instead of a stale counter.
 
-Polling is 20 seconds, not realtime: it costs two tiny HTTP calls per tick and
+Polling is 60 seconds, not realtime: it costs two tiny HTTP calls per tick and
 survives the box going away for a while. The page itself refreshes every four
 seconds and pauses while the tab is hidden.
 
@@ -66,7 +66,7 @@ Every column of the relay's behaviour, from `src/schema.js`:
 
 Plus actions: **Run now**, **Re-scan files**, **Refresh state**.
 
-Changing a setting writes one key. The agent picks it up within 20 seconds,
+Changing a setting writes one key. The agent picks it up within a minute,
 rewrites `/etc/gotohp-sync/config.env` in place, and restarts the timer only if
 the schedule actually changed.
 

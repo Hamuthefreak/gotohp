@@ -140,6 +140,25 @@ export function createApp(config) {
 	const kget = (key) => store.get(key);
 	const kset = (key, value) => store.set(key, value);
 
+	// Several keys in one round trip where the store supports it. The device
+	// heartbeat reads four keys per poll, and every separate read is a request
+	// against the state host's daily allowance.
+	async function kgetall(keys) {
+		if (typeof store.getMany === 'function') return store.getMany(keys);
+		const out = {};
+		for (const key of keys) out[key] = await kget(key);
+		return out;
+	}
+
+	function jsonOr(raw, fallback) {
+		if (!raw) return fallback;
+		try {
+			return JSON.parse(raw);
+		} catch {
+			return fallback;
+		}
+	}
+
 	async function kjson(key, fallback) {
 		const raw = await kget(key);
 		if (!raw) return fallback;
@@ -183,11 +202,11 @@ export function createApp(config) {
 	 * the next device to check in claims the relay. Outside the window nothing is
 	 * accepted, and the window closes as soon as it is used.
 	 */
-	async function device(request) {
+	async function device(request, knownHash) {
 		const token = bearer(request);
 		if (!token) return false;
 
-		const stored = await kget('device_token_hash');
+		const stored = knownHash !== undefined ? knownHash : await kget('device_token_hash');
 		if (stored) return stored === (await sha256(token));
 
 		const until = await kget('pairing_open_until');
@@ -242,7 +261,18 @@ export function createApp(config) {
 
 		if (path === '/api/session' && method === 'GET') {
 			const user = await auth.getUser(request, env);
-			const ownerSub = await kget('owner_sub');
+			// The owner check reads storage, and that storage can be unreachable
+			// while the site hosting it is paused. Answering the page anyway is far
+			// more useful than a 500, which the page can only report as "no password
+			// is set" - a message that then sends the owner looking for the wrong
+			// fault.
+			let ownerSub = null;
+			let stateOk = true;
+			try {
+				ownerSub = await kget('owner_sub');
+			} catch {
+				stateOk = false;
+			}
 			return json({
 				signedIn: Boolean(user),
 				email: user?.email || '',
@@ -253,6 +283,7 @@ export function createApp(config) {
 				signoutMethod: auth.signoutMethod || 'POST',
 				label: auth.label || 'Sign in',
 				configured: auth.configured !== false,
+				state: stateOk ? 'ok' : 'unavailable',
 				server_time: now(),
 			});
 		}
@@ -406,13 +437,19 @@ export function createApp(config) {
 		// ---- device channel: authenticated by a device token, never a session ---
 
 		if (path === '/api/device/poll' && method === 'POST') {
-			if (!(await device(request))) return text('unauthorized', 401);
+			// One read for everything this route needs, then one write. As five
+			// separate reads on a 20-second heartbeat, the poll alone spent the
+			// state host's entire daily request allowance, which paused the site and
+			// took the dashboard down with it.
+			const keys = ['device_token_hash', 'settings', 'commands', 'pending_cred'];
+			const stored = await kgetall(keys);
+			if (!(await device(request, stored.device_token_hash))) return text('unauthorized', 401);
 
 			const state = parseKv(await request.text());
 			await ksetjson('state', { ...state, reported_at: now() });
 
-			const settings = { ...defaults(), ...(await kjson('settings', {})) };
-			const commands = await kjson('commands', []);
+			const settings = { ...defaults(), ...jsonOr(stored.settings, {}) };
+			const commands = jsonOr(stored.commands, []);
 			const pending = commands.filter((c) => !c.done);
 
 			const lines = Object.entries(settings).map(([k, v]) => `SET ${k}=${v}`);
@@ -421,7 +458,7 @@ export function createApp(config) {
 			// A credential handed in from the dashboard is delivered exactly once
 			// and then forgotten, so a stolen dashboard session cannot re-read it
 			// and the VM does not depend on a second round trip.
-			const pendingCred = await kjson('pending_cred', null);
+			const pendingCred = jsonOr(stored.pending_cred, null);
 			if (pendingCred?.value) {
 				lines.push(`CREDS ${b64(pendingCred.value)}`);
 				await kset('pending_cred', '');

@@ -7,14 +7,21 @@
 import { createApp } from '../../src/app.js';
 import { createPasswordAuth } from '../../src/auth-password.js';
 import { blobStore } from '../../src/store-blob.js';
+import { remoteStore } from '../../src/store-remote.js';
 
 let cached;
 
 function build(env, origin) {
-	if (cached && cached.origin === origin) return cached;
+	// The store choice is part of the cache key: an instance that cached a
+	// Blob-backed app must not keep answering after the switch to D1.
+	const backend = env.STATE_URL && env.STATE_SECRET ? 'd1' : 'blob';
+	if (cached && cached.origin === origin && cached.backend === backend) return cached;
 	const auth = createPasswordAuth(env, origin);
 	const routes = createApp({
-		store: blobStore(env),
+		// D1 through the Sites deployment when it is configured; Blob only as a
+		// fallback for a deployment that predates it (its free quota is too small
+		// for this relay's polling).
+		store: env.STATE_URL && env.STATE_SECRET ? remoteStore(env) : blobStore(env),
 		origin,
 		sameOrigin: (request) => {
 			const site = request.headers.get('origin');
@@ -31,7 +38,7 @@ function build(env, origin) {
 			configured: auth.configured,
 		},
 	});
-	cached = { origin, auth, routes };
+	cached = { origin, backend, auth, routes };
 	return cached;
 }
 
@@ -42,6 +49,22 @@ async function readBody(req) {
 }
 
 export default async function handle(req, res) {
+	try {
+		await respond(req, res);
+	} catch (error) {
+		// Vercel answers any uncaught error with "A server error has occurred",
+		// which never says which call failed. Answer in JSON with the reason so
+		// the dashboard and curl both show something actionable.
+		console.error('gotohp relay handler failed:', error);
+		const detail = String(error?.message || error).slice(0, 300);
+		res.statusCode = 500;
+		res.setHeader('content-type', 'application/json; charset=utf-8');
+		res.setHeader('cache-control', 'no-store');
+		res.end(JSON.stringify({ error: 'the relay could not answer', detail }));
+	}
+}
+
+async function respond(req, res) {
 	// The canonical origin is the OAuth redirect URI and the origin every
 	// state-changing request is checked against. APP_ORIGIN wins; the request's
 	// own scheme and host are only a fallback for preview URLs.

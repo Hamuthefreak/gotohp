@@ -257,7 +257,10 @@
 				<section class="card">
 					<h3>Device</h3>
 					<p class="small muted" id="device-state">checking…</p>
-					<div style="margin-top: 12px"><button id="gen-token" type="button">Generate device token</button></div>
+					<div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap">
+						<button id="gen-token" type="button">Generate device token</button>
+						<button id="pair-device" type="button" class="ghost">Pair the relay</button>
+					</div>
 					<div id="token-box" class="hidden">
 						<p class="small muted">Put this in the repository secret <code>CONTROL_DEVICE_TOKEN</code>, then re-run the deploy. It is shown once.</p>
 						<code class="token" id="token-value"></code>
@@ -767,6 +770,14 @@
 				$('#token-box').classList.remove('hidden');
 				data.device.paired = true;
 				renderDevice();
+			});
+
+			$('#pair-device').addEventListener('click', async () => {
+				const res = await api('/api/device/pair', { method: 'POST' });
+				flash(
+					res.ok ? 'Pairing is open for ten minutes - the relay claims it on its next check-in.' : res.body?.error || 'That did not work.',
+					!res.ok,
+				);
 			});
 
 			$('#signin-google').addEventListener('click', () => {

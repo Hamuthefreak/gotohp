@@ -289,8 +289,6 @@ run_command() {
 	clear-log)
 		# "Clear the errors" means the relay's own logs and nothing else: no file
 		# under SRC_DIR is touched and nothing is deleted from Google Photos.
-		# Deleting the library itself is the separate delete-files command, which
-		# only ever runs because the owner pressed a button.
 		# truncate keeps the owner, so the sync user can still write afterwards.
 		local cleared=0 file
 		for file in "$STATE_DIR/gotohp.log" "$STATE_DIR/failures.log"; do
@@ -303,38 +301,10 @@ run_command() {
 		message="cleared $cleared log file(s)"
 		;;
 	delete-files)
-		# The relay's own copies and nothing else: every file under SRC_DIR plus
-		# the bookkeeping that says they are uploaded. Google Photos is never
-		# touched, and config.env survives so the box stays paired with its
-		# accounts. This cannot be undone, so a path that looks like a system
-		# directory is refused outright instead of being half-emptied.
-		local src=${SRC_DIR:-} count=0
-		case $src in
-		/ | /bin | /boot | /dev | /etc | /home | /lib | /lib64 | /media | /mnt | /opt | /proc | /root | /run | /sbin | /srv | /sys | /tmp | /usr | /var)
-			message="refusing to delete $src"
-			;;
-		/*)
-			if [[ $src == *..* ]]; then
-				message="refusing to delete $src"
-			elif [[ ! -d $src ]]; then
-				message="$src is not a directory on this server"
-			else
-				count=$(find "$src" -mindepth 1 -type f 2>/dev/null | wc -l) || count=0
-				count=${count//[!0-9]/}
-				if ! find "$src" -mindepth 1 -delete 2>/dev/null; then
-					message="could not delete everything under $src"
-				elif ! rm -f "$STATE_DIR/scan.previous" "$STATE_DIR/uploaded.tsv"; then
-					message="deleted $count file(s) but could not reset the sync state"
-				else
-					status=ok
-					message="deleted $count file(s) from $src; Google Photos untouched"
-				fi
-			fi
-			;;
-		*)
-			message="SRC_DIR is not set in $CONFIG_FILE"
-			;;
-		esac
+		# The dashboard used to offer this and it emptied SRC_DIR. Nothing there
+		# deletes files any more, so a command still queued from before that change
+		# is refused here instead of acted on.
+		message="refusing: the dashboard no longer deletes files"
 		;;
 	creds-set)
 		if [[ -z $arg ]]; then

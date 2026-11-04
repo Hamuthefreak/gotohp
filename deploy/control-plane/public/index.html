@@ -285,21 +285,11 @@
 
 			<section class="card" id="cleanup-card" style="margin-bottom: 14px">
 				<h3>Delete</h3>
-				<p class="small muted">
-					The first three clear history the dashboard keeps. Delete relay files empties the server's own copy of
-					your library. Nothing here ever deletes a photo from Google Photos.
-				</p>
+				<p class="small muted">Removes history the dashboard keeps. Your files on the relay and your photos in Google Photos are never touched.</p>
 				<div class="cleanup-actions">
 					<button type="button" data-delete="events">Delete activity feed</button>
 					<button type="button" data-delete="commands">Delete command history</button>
 					<button type="button" data-command="clear-log">Delete relay logs</button>
-					<button
-						type="button"
-						data-command="delete-files"
-						data-confirm="Delete every file the relay keeps on this server? Photos already in Google Photos stay there, and this cannot be undone."
-					>
-						Delete files on the server
-					</button>
 				</div>
 				<span class="small muted" id="cleanup-note"></span>
 			</section>
@@ -748,7 +738,6 @@
 
 			for (const button of document.querySelectorAll('[data-command]')) {
 				button.addEventListener('click', async () => {
-					if (button.dataset.confirm && !confirm(button.dataset.confirm)) return;
 					button.disabled = true;
 					const res = await api('/api/commands', {
 						method: 'POST',

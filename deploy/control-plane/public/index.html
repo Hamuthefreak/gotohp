@@ -421,13 +421,27 @@
 
 			// ------------------------------------------------------------- live
 
+			function freshestReport(...bundles) {
+				// The agent posts state and activity separately, so "offline" has to be
+				// judged on whichever arrived last. Reading only the activity stamp
+				// called a box offline while it was answering every 20 seconds.
+				let best = 0;
+				for (const bundle of bundles) {
+					for (const stamp of [bundle?.reported_at, bundle?.server_time]) {
+						const at = stamp ? new Date(stamp).getTime() : 0;
+						if (Number.isFinite(at) && at > best) best = at;
+					}
+				}
+				return best;
+			}
+
 			function statusOf(activity, state) {
-				const reported = activity?.reported_at ? new Date(activity.reported_at).getTime() : 0;
+				const reported = freshestReport(activity, state);
 				const age = reported ? (Date.now() - reported) / 1000 : Infinity;
 
 				if (state?.paused === 'true') return { key: 'warn', text: 'Paused', headline: 'Relay paused', detail: 'Files keep arriving over SFTP; nothing uploads until you resume.' };
 				if (age === Infinity) return { key: 'bad', text: 'No contact', headline: 'The VM has not reported yet', detail: 'Pair the device and run the deploy workflow.' };
-				if (age > 150) return { key: 'bad', text: 'Offline', headline: 'No report from the VM', detail: `Last contact ${ago(activity.reported_at)}. Check the box and the control agent.` };
+				if (age > 150) return { key: 'bad', text: 'Offline', headline: 'No report from the VM', detail: `Last contact ${ago(new Date(reported).toISOString())}. Check the box and the control agent.` };
 
 				const phase = activity.phase || 'idle';
 				if (phase === 'error') return { key: 'bad', text: 'Error', headline: activity.error || activity.message || 'The last run failed', detail: 'The files stay pending and are retried on the next run.' };
@@ -440,7 +454,10 @@
 			function renderLive() {
 				const activity = live.activity || {};
 				const state = live.state || {};
-				const status = statusOf(activity, state);
+				let status = statusOf(activity, state);
+				if (status.key !== 'bad' && Array.isArray(live.accounts?.list) && live.accounts.list.length === 0) {
+					status = { key: 'warn', text: 'No account', headline: 'No Google Photos account connected', detail: 'Uploads fail until you add one in the account card below.' };
+				}
 
 				const pill = $('#phase-pill');
 				pill.className = `pill ${status.key === 'live' ? 'live' : status.key === 'busy' ? 'busy' : status.key}`;
@@ -567,7 +584,7 @@
 
 				$('#accounts-state').textContent = accounts.length
 					? `New photos go to ${state.selected || accounts[0].email}.`
-					: 'No Google account on the relay yet - add one below.';
+					: 'No Google account on the relay yet, so every upload fails. Add one below.';
 
 				for (const account of accounts) {
 					const active = account.selected || account.email === state.selected;

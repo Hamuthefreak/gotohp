@@ -34,7 +34,33 @@ if [[ ${FAKE_FAIL_ALL:-0} == 1 ]]; then
 	echo '{"failed":1,"error":"simulated outage"}'
 	exit 1
 fi
+# gotohp-cli stats every path it is given. The service has no working
+# directory, so a relative path here means the batch never starts.
+skip_next=0
+seen_command=0
 for arg in "$@"; do
+	# $1 is the subcommand (upload), not a path.
+	if ((seen_command == 0)); then
+		seen_command=1
+		continue
+	fi
+	if ((skip_next)); then
+		skip_next=0
+		continue
+	fi
+	case $arg in
+	--threads | -t | --log-level | -l | --config | --exclude | -e | --album | -a | --account | --proxy)
+		skip_next=1
+		continue
+		;;
+	-*) continue ;;
+	esac
+	if [[ ! -f $arg ]]; then
+		printf 'MISSING %s\n' "$arg" >>"$FAKE_LOG"
+		printf 'MISSING %s\n' "$arg" >&2
+		printf '{"failed":1,"error":"invalid upload path %s"}\n' "$arg"
+		exit 1
+	fi
 	if [[ $arg == *BAD* ]]; then
 		printf '{"path":"%s","success":false,"error":"upload rejected"}\n' "$arg"
 		exit 1
@@ -93,6 +119,7 @@ ck "both halves in the same call" "grep -q 'IMG_0001.HEIC.*IMG_0001.MOV' $FAKE_L
 ck "passes --pair-live-photos" "grep -q -- '--pair-live-photos' $FAKE_LOG"
 ck "passes --no-tui and --threads" "grep -q -- '--no-tui' $FAKE_LOG && grep -q -- '--threads 3' $FAKE_LOG"
 ck "separates flags from paths" "grep -q -- ' -- ' $FAKE_LOG"
+ck "every path exists where the service runs it" "! grep -q MISSING $FAKE_LOG"
 ck "ignores manifest, lock and .aae" "! grep -qiE 'sqlite|\.lock|\.aae' $FAKE_LOG"
 ck "ledger holds both halves" "[[ $(ledger) -eq 2 ]]"
 

@@ -5,21 +5,21 @@
 // api/ is a one-line re-export of this, which keeps Vercel's file-system routing
 // unambiguous for nested paths like /api/device/poll.
 import { createApp } from '../../src/app.js';
-import { createGoogleAuth } from '../../src/auth-google.js';
+import { createPasswordAuth } from '../../src/auth-password.js';
 import { blobStore } from '../../src/store-blob.js';
 
 let cached;
 
 function build(env, origin) {
 	if (cached && cached.origin === origin) return cached;
-	const auth = createGoogleAuth(env, origin);
+	const auth = createPasswordAuth(env, origin);
 	const routes = createApp({
 		store: blobStore(env),
 		origin,
 		sameOrigin: (request) => {
 			const site = request.headers.get('origin');
-			// Same-origin fetches send the exact origin; a browser form may send
-			// nothing at all, which only same-site requests can do.
+			// Same-origin fetches send the exact origin; a form post from the login
+			// page may send nothing at all, which only same-site requests can do.
 			return !site || site === origin;
 		},
 		auth: {
@@ -27,7 +27,7 @@ function build(env, origin) {
 			loginUrl: '/api/auth/login',
 			signoutUrl: '/api/auth/logout',
 			signoutMethod: 'GET',
-			label: 'Sign in with Google',
+			label: 'Sign in',
 			configured: auth.configured,
 		},
 	});

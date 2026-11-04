@@ -17,7 +17,10 @@ const TEXT_HEAD = {
 	'cache-control': 'no-store',
 };
 
-const COMMAND_KINDS = ['run-now', 'refresh', 'rescan'];
+const COMMAND_KINDS = ['run-now', 'refresh', 'rescan', 'creds-set', 'creds-remove'];
+
+/** Credentials are account emails; nothing else ever reaches a shell. */
+const EMAIL = /^[A-Za-z0-9._%+@-]{3,120}$/;
 const PHASES = ['idle', 'scanning', 'waiting', 'uploading', 'error'];
 
 /** Longest accepted device activity body, in bytes. */
@@ -46,6 +49,13 @@ function bearer(request) {
 async function sha256(value) {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
 	return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function b64(value) {
+	const bytes = new TextEncoder().encode(value);
+	let out = '';
+	for (const b of bytes) out += String.fromCharCode(b);
+	return btoa(out);
 }
 
 function randomToken() {
@@ -237,6 +247,8 @@ export function createApp(config) {
 				events: events.slice().reverse(),
 				commands: commands.slice(-10).reverse(),
 				device: { paired: Boolean(await kget('device_token_hash')) },
+				accounts: await kjson('accounts', { list: [], selected: '' }),
+				pendingCredential: Boolean(await kget('pending_cred')),
 				ownerEmail: (await kget('owner_email')) || '',
 				loginUrl: auth.loginUrl || null,
 				signoutUrl: auth.signoutUrl || null,
@@ -257,6 +269,8 @@ export function createApp(config) {
 				events: events.slice().reverse(),
 				state: await kjson('state', {}),
 				commands: commands.slice(-10).reverse(),
+				accounts: await kjson('accounts', { list: [], selected: '' }),
+				pendingCredential: Boolean(await kget('pending_cred')),
 				server_time: now(),
 			});
 		}
@@ -286,11 +300,17 @@ export function createApp(config) {
 			const kind = String(body?.kind || '');
 			if (!COMMAND_KINDS.includes(kind)) return json({ error: `kind must be one of ${COMMAND_KINDS.join(', ')}` }, 400);
 
+			// Only the two account commands carry a value, and it is always an email.
+			const needsArg = kind === 'creds-set' || kind === 'creds-remove';
+			const arg = str(body?.arg, 120);
+			if (needsArg && !EMAIL.test(arg)) return json({ error: 'arg must be an account email' }, 400);
+
 			const commands = await kjson('commands', []);
 			const entry = { id: crypto.randomUUID().slice(0, 8), kind, created_at: now(), done: false };
+			if (needsArg) entry.arg = arg;
 			commands.push(entry);
 			await ksetjson('commands', commands.slice(-50));
-			await pushEvent('command', `Queued "${kind}" for the relay`);
+			await pushEvent('command', needsArg ? `Queued "${kind}" for ${arg}` : `Queued "${kind}" for the relay`);
 			return json({ ok: true, command: entry });
 		}
 
@@ -325,7 +345,17 @@ export function createApp(config) {
 			const pending = commands.filter((c) => !c.done);
 
 			const lines = Object.entries(settings).map(([k, v]) => `SET ${k}=${v}`);
-			for (const c of pending) lines.push(`CMD ${c.id} ${c.kind}`);
+			for (const c of pending) lines.push(`CMD ${c.id} ${c.kind}${c.arg ? ` ${c.arg}` : ''}`);
+
+			// A credential handed in from the dashboard is delivered exactly once
+			// and then forgotten, so a stolen dashboard session cannot re-read it
+			// and the VM does not depend on a second round trip.
+			const pendingCred = await kjson('pending_cred', null);
+			if (pendingCred?.value) {
+				lines.push(`CREDS ${b64(pendingCred.value)}`);
+				await kset('pending_cred', '');
+			}
+
 			return text(`${lines.join('\n')}\n`);
 		}
 
@@ -354,20 +384,100 @@ export function createApp(config) {
 			if (!(await device(request))) return text('unauthorized', 401);
 
 			const commands = await kjson('commands', []);
+			const body = await request.text();
 			let changed = false;
-			for (const line of (await request.text()).split('\n')) {
-				const match = /^RESULT\s+(\S+)\s+(ok|fail)(?:\s+(.*))?$/.exec(line.trim());
-				if (!match) continue;
-				const target = commands.find((c) => c.id === match[1]);
-				if (!target || target.done) continue;
-				target.done = true;
-				target.ok = match[2] === 'ok';
-				target.output = (match[3] || '').slice(0, 500);
-				target.done_at = now();
-				changed = true;
-				await pushEvent(target.ok ? 'command' : 'error', `"${target.kind}" ${target.ok ? 'done' : 'failed'}: ${target.output || ''}`);
+
+			for (const line of body.split('\n')) {
+				const text_ = line.trim();
+
+				const match = /^RESULT\s+(\S+)\s+(ok|fail)(?:\s+(.*))?$/.exec(text_);
+				if (match) {
+					const target = commands.find((c) => c.id === match[1]);
+					if (!target || target.done) continue;
+					target.done = true;
+					target.ok = match[2] === 'ok';
+					target.output = (match[3] || '').slice(0, 500);
+					target.done_at = now();
+					changed = true;
+					await pushEvent(target.ok ? 'command' : 'error', `"${target.kind}" ${target.ok ? 'done' : 'failed'}: ${target.output || ''}`);
+					continue;
+				}
+
+				// The account list the box actually holds, after any change.
+				if (text_.startsWith('ACCOUNTS ')) {
+					let parsed;
+					try {
+						parsed = JSON.parse(text_.slice('ACCOUNTS '.length));
+					} catch {
+						continue;
+					}
+					const list = Array.isArray(parsed?.list) ? parsed.list : [];
+					const clean = list
+						.filter((a) => EMAIL.test(String(a?.email || '')))
+						.slice(0, 20)
+						.map((a) => ({ email: String(a.email), selected: Boolean(a.selected) }));
+					const selected = clean.find((a) => a.selected)?.email || str(parsed?.selected, 120);
+					await ksetjson('accounts', { list: clean, selected });
+					continue;
+				}
+
+				if (text_.startsWith('CREDS_RESULT ')) {
+					const rest = text_.slice('CREDS_RESULT '.length);
+					const ok = rest.startsWith('ok');
+					const detail = rest.replace(/^(ok|fail)\s*/, '').slice(0, 300);
+					await pushEvent(ok ? 'upsert' : 'error', ok ? `Google account added: ${detail}` : `Google sign-in failed: ${detail}`);
+				}
 			}
+
 			if (changed) await ksetjson('commands', commands);
+			return json({ ok: true });
+		}
+
+		// ---- accounts -----------------------------------------------------
+
+		if (path === '/api/accounts/credential' && method === 'POST') {
+			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
+			const who = await owner(request, env);
+			if (who.error) return who.error;
+
+			const body = await request.json().catch(() => null);
+			const value = String(body?.value || '').trim();
+			if (value.length < 8) return json({ error: 'that does not look like an oauth_token value' }, 400);
+			if (value.length > 4096) return json({ error: 'that value is too long to be a cookie' }, 400);
+			if (/[\s\x00-\x1f\x7f]/.test(value)) return json({ error: 'the value contains whitespace or control characters' }, 400);
+
+			await ksetjson('pending_cred', { value, created_at: now() });
+			await pushEvent('upsert', 'Google sign-in handed to the relay');
+			return json({ ok: true });
+		}
+
+		if (path === '/api/accounts/select' && method === 'POST') {
+			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
+			const who = await owner(request, env);
+			if (who.error) return who.error;
+
+			const email = str((await request.json().catch(() => null))?.email, 120);
+			if (!EMAIL.test(email)) return json({ error: 'email is required' }, 400);
+
+			const commands = await kjson('commands', []);
+			commands.push({ id: crypto.randomUUID().slice(0, 8), kind: 'creds-set', arg: email, created_at: now(), done: false });
+			await ksetjson('commands', commands.slice(-50));
+			await pushEvent('command', `Switching uploads to ${email}`);
+			return json({ ok: true });
+		}
+
+		if (path === '/api/accounts/remove' && method === 'POST') {
+			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
+			const who = await owner(request, env);
+			if (who.error) return who.error;
+
+			const email = str((await request.json().catch(() => null))?.email, 120);
+			if (!EMAIL.test(email)) return json({ error: 'email is required' }, 400);
+
+			const commands = await kjson('commands', []);
+			commands.push({ id: crypto.randomUUID().slice(0, 8), kind: 'creds-remove', arg: email, created_at: now(), done: false });
+			await ksetjson('commands', commands.slice(-50));
+			await pushEvent('command', `Removing ${email} from the relay`);
 			return json({ ok: true });
 		}
 

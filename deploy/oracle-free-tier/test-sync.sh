@@ -74,6 +74,7 @@ run() {
 }
 calls() { grep -c '^CALL' "$FAKE_LOG" 2>/dev/null || true; }
 ledger() { wc -l <"$BASE/state/uploaded.tsv" | tr -d ' '; }
+year_of() { date -u -d "@$(stat -c %Y "$1")" +%Y; }
 
 echo "== first pass snapshots, never uploads =="
 echo heic >"$BASE/repo/2024/07/IMG_0001.HEIC"
@@ -204,6 +205,30 @@ run "$BASE/nopair.env"
 ck "pairing flag absent when disabled" "! grep -q -- '--pair-live-photos' $FAKE_LOG"
 ck "dependent option dropped rather than rejected by gotohp" "! grep -q -- '--ignore-apple-metadata' $FAKE_LOG"
 ck "says why it was dropped" "grep -q 'PAIR_LIVE_PHOTOS is false' $BASE/out"
+
+echo "== upload dates come from the file, not from the transfer =="
+python3 - "$BASE/repo/2024/07/IMG_2019.JPG" <<'PY'
+import struct, sys
+
+path = sys.argv[1]
+text = b"2019:07:09 18:20:27\0"  # 20 bytes, IFD0 DateTime
+entry = struct.pack("<HHI", 0x0132, 2, len(text)) + struct.pack("<I", 26)
+tiff = b"II" + struct.pack("<HI", 42, 8) + struct.pack("<H", 1) + entry
+tiff += struct.pack("<I", 0) + text
+exif = b"Exif\0\0" + tiff
+app1 = b"\xff\xe1" + struct.pack(">H", len(exif) + 2) + exif
+open(path, "wb").write(b"\xff\xd8" + app1 + b"\xff\xd9")
+PY
+touch -d '2026-11-04 12:00:00' "$BASE/repo/2024/07/IMG_2019.JPG"
+: >"$FAKE_LOG"
+run
+ck "mtime is corrected from EXIF before the scan" "[[ $(year_of "$BASE/repo/2024/07/IMG_2019.JPG") -eq 2019 ]]"
+ck "says how many it dated" "grep -q 'dated 1 of' $BASE/out"
+run
+ck "the corrected file settles and uploads" "grep -q IMG_2019.JPG $FAKE_LOG"
+echo plain >"$BASE/repo/2024/07/IMG_PLAIN.JPG"
+run
+ck "a file with no metadata keeps its arrival mtime" "[[ $(year_of "$BASE/repo/2024/07/IMG_PLAIN.JPG") -eq 2026 ]]"
 
 echo "== a bad log level is refused =="
 cp "$BASE/test.env" "$BASE/badlevel.env"

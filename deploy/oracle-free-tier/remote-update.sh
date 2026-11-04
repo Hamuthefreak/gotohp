@@ -20,7 +20,7 @@ SYNC_CONF=${GOTOHP_SYNC_CONFIG:-/etc/gotohp-sync/config.env}
 
 for file in gotohp-cli sync.sh install.sh config.env.example \
 	gotohp-sync.service gotohp-sync.timer \
-	control-agent.sh gotohp-control.service gotohp-control.timer; do
+	control-agent.sh gotohp-control.service gotohp-control.timer media-date.py; do
 	[[ -f $SRC/$file ]] || {
 		echo "missing $SRC/$file" >&2
 		exit 1
@@ -81,6 +81,7 @@ if needs_bootstrap; then
 else
 	echo "==> updating an existing install"
 	install -m 0755 -o root -g root "$SRC/sync.sh" /usr/local/bin/gotohp-sync
+	install -m 0755 -o root -g root "$SRC/media-date.py" /usr/local/bin/gotohp-media-date
 	install -m 0755 -o root -g root "$SRC/control-agent.sh" /usr/local/bin/gotohp-control
 	install -m 0644 -o root -g root "$SRC/gotohp-sync.service" /etc/systemd/system/gotohp-sync.service
 	install -m 0644 -o root -g root "$SRC/gotohp-sync.timer" /etc/systemd/system/gotohp-sync.timer

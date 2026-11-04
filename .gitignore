@@ -16,3 +16,4 @@ wails_windows_amd64.syso
 /result
 /result-*
 /.direnv
+__pycache__/

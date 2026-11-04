@@ -125,6 +125,7 @@ jobs:
             deploy/oracle-free-tier/gotohp-sync.service \
             deploy/oracle-free-tier/gotohp-sync.timer \
             deploy/oracle-free-tier/control-agent.sh \
+            deploy/oracle-free-tier/media-date.py \
             deploy/oracle-free-tier/gotohp-control.service \
             deploy/oracle-free-tier/gotohp-control.timer \
             deploy/oracle-free-tier/remote-update.sh \

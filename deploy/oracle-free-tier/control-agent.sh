@@ -246,24 +246,30 @@ run_command() {
 
 	case $kind in
 	run-now)
+		local started_stamp attempt result now
+		started_stamp=$(systemctl show -p InactiveEnterTimestampMonotonic --value "$SERVICE" 2>/dev/null)
 		if ! systemctl start --no-block "$SERVICE"; then
 			message="could not start $SERVICE"
 		else
 			status=ok
 			message="started $SERVICE"
-			# A run that fails at once (no Google account, bad config) used to
-			# look identical to one that is busy for hours: both said "started".
-			# Give a short run a moment, then report what actually happened.
-			local attempt result
-			for attempt in 1 2 3 4 5 6; do
-				systemctl is-active --quiet "$SERVICE" || break
+			# A run that fails at once (bad config) used to look identical to one
+			# busy for hours: both said "started". Wait for it to leave and return,
+			# then report what actually happened - but only if it really ran.
+			# Result= is stale on a unit that never became active, which is how
+			# an untouched unit reported "finished" while files were still pending.
+			for attempt in 1 2 3 4 5 6 7 8; do
 				sleep 1
+				systemctl is-active --quiet "$SERVICE" || break
 			done
 			if systemctl is-active --quiet "$SERVICE"; then
 				message="running now"
 			else
+				now=$(systemctl show -p InactiveEnterTimestampMonotonic --value "$SERVICE" 2>/dev/null)
 				result=$(systemctl show -p Result --value "$SERVICE" 2>/dev/null)
-				if [[ $result == success ]]; then
+				if [[ -n $started_stamp && $now == "$started_stamp" ]]; then
+					message="running now"
+				elif [[ $result == success ]]; then
 					message="finished: nothing left to upload"
 				else
 					status=fail

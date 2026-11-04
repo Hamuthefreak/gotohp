@@ -206,9 +206,11 @@ await test('a relay with no stored token pairs itself inside an open window only
 	assert.equal((await app(post('/api/device/poll', 'agent=1\n', 'text/plain', mine), {})).status, 401);
 
 	// Opening the window is a dashboard action, so a foreign origin cannot do it.
-	assert.equal((await app(post('/api/device/pair', {}, 'application/json', { origin: 'https://evil.example' }), {})).status, 403);
-	const opened = await app(post('/api/device/pair', {}, 'application/json', { origin: ORIGIN }), {});
+	assert.equal((await app(post('/api/device/token', { pair: true }, 'application/json', { origin: 'https://evil.example' }), {})).status, 403);
+	const opened = await app(post('/api/device/token', { pair: true }, 'application/json', { origin: ORIGIN }), {});
 	assert.equal(opened.status, 200);
+	// Pairing must not hand out a token, or the operator would lose the old one.
+	assert.equal((await opened.json()).token, undefined);
 
 	// The next check-in claims the dashboard, and the window then shuts.
 	assert.equal((await app(post('/api/device/poll', 'agent=1\n', 'text/plain', mine), {})).status, 200);

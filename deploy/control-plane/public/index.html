@@ -773,7 +773,11 @@
 			});
 
 			$('#pair-device').addEventListener('click', async () => {
-				const res = await api('/api/device/pair', { method: 'POST' });
+				const res = await api('/api/device/token', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ pair: true }),
+				});
 				flash(
 					res.ok ? 'Pairing is open for ten minutes - the relay claims it on its next check-in.' : res.body?.error || 'That did not work.',
 					!res.ok,

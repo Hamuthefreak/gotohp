@@ -370,21 +370,22 @@ export function createApp(config) {
 			return json({ paired: Boolean(await kget('device_token_hash')) });
 		}
 
-		if (path === '/api/device/pair' && method === 'POST') {
-			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
-			const who = await owner(request, env);
-			if (who.error) return who.error;
-
-			const until = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-			await kset('pairing_open_until', until);
-			await pushEvent('device', 'Pairing is open for ten minutes');
-			return json({ ok: true, until });
-		}
-
 		if (path === '/api/device/token' && method === 'POST') {
 			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
 			const who = await owner(request, env);
 			if (who.error) return who.error;
+
+			// `pair` opens a window instead of issuing a token: the device keeps the
+			// token it already has and the first check-in claims the dashboard. It
+			// lives on this route because a Hobby deployment allows only twelve
+			// serverless functions and every route needs its own file.
+			const asked = await request.json().catch(() => null);
+			if (asked?.pair === true) {
+				const until = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+				await kset('pairing_open_until', until);
+				await pushEvent('device', 'Pairing is open for ten minutes');
+				return json({ ok: true, until });
+			}
 
 			// Shown exactly once. Only the hash is stored, the way a password would be.
 			const token = randomToken();

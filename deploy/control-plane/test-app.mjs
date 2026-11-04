@@ -4,6 +4,9 @@
 // an in-memory store and a fake signed-in user. This is the contract both hosts
 // (Worker + D1, Vercel + Blob) are held to.
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import { createApp } from './src/app.js';
 import { createPasswordAuth } from './src/auth-password.js';
@@ -363,6 +366,26 @@ await test('the dashboard password signs in with a username and owns the dashboa
 	assert.equal(session.email, 'hamu');
 	assert.equal(session.isOwner, true);
 	assert.equal((await signedIn('/api/dashboard')).status, 200);
+});
+
+await test('every api path the dashboard calls has a function Vercel can serve', async () => {
+	// Twice now a button has pointed at a route that existed only in src/app.js:
+	// Vercel serves a path only if api/ has a file for it, so the click 404'd and
+	// the dashboard looked broken. This reads the page's own URLs and checks the
+	// files, which is the closest a local test can get to the deployed router.
+	const html = await readFile(new URL('./public/index.html', import.meta.url), 'utf8');
+	const called = new Set([...html.matchAll(/["'`]\/api\/([^"'`?\s]+)/g)].map((match) => match[1]));
+	assert.ok(called.size >= 5, `expected the dashboard to call several endpoints, saw ${called.size}`);
+
+	const has = (rel) => existsSync(fileURLToPath(new URL(rel, import.meta.url)));
+	const missing = [];
+	for (const path of called) {
+		// A single segment is handled by the catch-all; deeper paths each need a
+		// file, because Vercel's zero-config catch-all only matches one segment.
+		const served = path.split('/').length === 1 ? has('./api/[...path].js') : has(`./api/${path}.js`);
+		if (!served) missing.push(`/api/${path}`);
+	}
+	assert.deepEqual(missing, [], `the dashboard calls paths with no function: ${missing.join(', ')}`);
 });
 
 // ---------------------------------------------------------------------------

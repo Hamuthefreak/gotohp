@@ -1,1 +1,1 @@
-export { default, config } from '../_lib/handler.js';
+export { default, config } from '../../api/_lib/handler.js';

@@ -45,10 +45,30 @@ DELETE_AFTER_UPLOAD=${DELETE_AFTER_UPLOAD:-false}
 PAIR_LIVE_PHOTOS=${PAIR_LIVE_PHOTOS:-true}
 DRY_RUN=${DRY_RUN:-false}
 
+# Mirrors the upload flags of gotohp-cli. The dashboard writes these; every one
+# is optional and defaults to the behaviour the relay shipped with.
+SAVER=${SAVER:-false}
+USE_QUOTA=${USE_QUOTA:-false}
+FORCE_UPLOAD=${FORCE_UPLOAD:-false}
+DISABLE_FILTER=${DISABLE_FILTER:-false}
+DATE_FROM_FILENAME=${DATE_FROM_FILENAME:-false}
+EXCLUDE_PATTERN=${EXCLUDE_PATTERN:-}
+ALBUM=${ALBUM:-}
+UPLOAD_INCOMPLETE_LIVE=${UPLOAD_INCOMPLETE_LIVE:-false}
+UPDATE_EXISTING_TO_LIVE=${UPDATE_EXISTING_TO_LIVE:-false}
+IGNORE_APPLE_METADATA=${IGNORE_APPLE_METADATA:-false}
+LOG_LEVEL=${LOG_LEVEL:-warn}
+
 [[ -d $SRC_DIR ]] || die "SRC_DIR '$SRC_DIR' is not a directory"
 [[ -x $GOTOHP_BIN ]] || die "GOTOHP_BIN '$GOTOHP_BIN' is not executable"
 [[ -r $GOTOHP_CONFIG ]] || die "GOTOHP_CONFIG '$GOTOHP_CONFIG' is missing - add a Google account first"
 command -v flock >/dev/null 2>&1 || die "flock not found (install util-linux)"
+
+case $LOG_LEVEL in debug | info | warn | error) ;; *) die "LOG_LEVEL must be debug, info, warn or error" ;; esac
+if [[ $PAIR_LIVE_PHOTOS != true ]] &&
+	[[ $UPLOAD_INCOMPLETE_LIVE == true || $UPDATE_EXISTING_TO_LIVE == true || $IGNORE_APPLE_METADATA == true ]]; then
+	warn "Live Photo matching options are ignored because PAIR_LIVE_PHOTOS is false"
+fi
 
 install -d -m 0700 "$STATE_DIR"
 
@@ -116,12 +136,27 @@ upload() {
 		--config "$GOTOHP_CONFIG"
 		--no-tui
 		--threads "$THREADS"
-		--log-level warn
+		--log-level "$LOG_LEVEL"
 	)
 
 	[[ -n $ACCOUNT ]] && cmd+=(--account "$ACCOUNT")
 	[[ $PAIR_LIVE_PHOTOS == true ]] && cmd+=(--pair-live-photos)
 	[[ $DELETE_AFTER_UPLOAD == true ]] && cmd+=(--delete)
+	[[ $SAVER == true ]] && cmd+=(--saver)
+	[[ $USE_QUOTA == true ]] && cmd+=(--use-quota)
+	[[ $FORCE_UPLOAD == true ]] && cmd+=(--force)
+	[[ $DISABLE_FILTER == true ]] && cmd+=(--disable-filter)
+	[[ $DATE_FROM_FILENAME == true ]] && cmd+=(--date-from-filename)
+	[[ -n $EXCLUDE_PATTERN ]] && cmd+=(--exclude "$EXCLUDE_PATTERN")
+	[[ -n $ALBUM ]] && cmd+=(--album "$ALBUM")
+
+	# gotohp-cli rejects these unless pairing is on, so they are dropped rather
+	# than handed over to fail the whole batch.
+	if [[ $PAIR_LIVE_PHOTOS == true ]]; then
+		[[ $UPLOAD_INCOMPLETE_LIVE == true ]] && cmd+=(--upload-incomplete-live-photos)
+		[[ $UPDATE_EXISTING_TO_LIVE == true ]] && cmd+=(--update-existing-photos-to-live)
+		[[ $IGNORE_APPLE_METADATA == true ]] && cmd+=(--ignore-apple-metadata)
+	fi
 
 	"${cmd[@]}" -- "$@" >"$LAST_RESULT" 2>>"$GOTOHP_LOG"
 }

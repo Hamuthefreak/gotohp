@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="robots" content="noindex" />
+		<title>gotohp relay</title>
+		<style>
+			:root {
+				--bg: #0e1116;
+				--panel: #141920;
+				--line: #232b36;
+				--text: #e6edf3;
+				--muted: #8b98a8;
+				--accent: #4ade80;
+				--warn: #fbbf24;
+				--bad: #f87171;
+			}
+			* { box-sizing: border-box; }
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+			}
+			main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 96px; }
+			header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+			h1 { font-size: 19px; letter-spacing: -0.01em; margin: 0; font-weight: 650; }
+			.tag { color: var(--muted); font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+			.spacer { flex: 1; }
+			a { color: var(--accent); }
+			button {
+				font: inherit;
+				color: var(--text);
+				background: #1b222b;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 8px 14px;
+				cursor: pointer;
+			}
+			button:hover { border-color: #34404f; }
+			button.primary { background: var(--accent); color: #06120a; border-color: var(--accent); font-weight: 600; }
+			button:disabled { opacity: 0.45; cursor: not-allowed; }
+			.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 22px; }
+			.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+			.card .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+			.card .v { font: 600 20px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 4px; }
+			.card .v.small { font-size: 14px; font-weight: 500; }
+			.actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 26px; }
+			figure { margin: 0 0 26px; }
+			fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 4px 16px 14px; margin: 0 0 14px; background: var(--panel); }
+			legend { color: var(--muted); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; padding: 0 6px; }
+			.row { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid #1a212a; }
+			.row:last-child { border-bottom: 0; }
+			.row label { flex: 0 0 190px; font-weight: 550; }
+			.row .help { color: var(--muted); font-size: 13px; }
+			.row .danger { color: var(--warn); }
+			input[type="text"], input[type="number"], select {
+				font: inherit;
+				color: var(--text);
+				background: #0f141a;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				padding: 6px 9px;
+				width: 100%;
+				max-width: 280px;
+			}
+			input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); margin-top: 3px; }
+			.savebar {
+				position: sticky;
+				bottom: 0;
+				display: flex;
+				gap: 12px;
+				align-items: center;
+				background: linear-gradient(#0e111600, #0e1116 35%);
+				padding: 16px 0;
+			}
+			#note { color: var(--muted); font-size: 13px; }
+			#note.bad { color: var(--bad); }
+			code, .mono { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+			.token { word-break: break-all; background: #0f141a; border: 1px dashed var(--line); border-radius: 8px; padding: 10px; }
+			.hidden { display: none; }
+			#gate { max-width: 480px; margin: 12vh auto; text-align: center; }
+			#gate p { color: var(--muted); }
+		</style>
+	</head>
+	<body>
+		<div id="gate" class="hidden">
+			<h1>gotohp relay</h1>
+			<p id="gate-msg"></p>
+			<div id="gate-action"></div>
+		</div>
+
+		<main id="app" class="hidden">
+			<header>
+				<h1>gotohp relay</h1>
+				<span class="tag" id="whoami"></span>
+				<span class="spacer"></span>
+				<button id="signout" type="button">Sign out</button>
+			</header>
+
+			<div class="cards" id="cards"></div>
+
+			<div class="actions">
+				<button class="primary" data-command="run-now">Run now</button>
+				<button data-command="rescan">Re-scan files</button>
+				<button data-command="refresh">Refresh state</button>
+			</div>
+
+			<figure>
+				<fieldset>
+					<legend>Device</legend>
+					<div class="row">
+						<label>Pairing</label>
+						<div style="flex: 1">
+							<div class="help" id="device-state">checking…</div>
+							<div id="token-box" class="hidden" style="margin-top: 10px">
+								<div class="help">Copy this into the <code>CONTROL_DEVICE_TOKEN</code> repository secret, then re-run the deploy. It is shown once.</div>
+								<div class="token mono" id="token-value"></div>
+							</div>
+							<div style="margin-top: 10px"><button type="button" id="gen-token">Generate device token</button></div>
+						</div>
+					</div>
+				</fieldset>
+			</figure>
+
+			<form id="settings"></form>
+
+			<div class="savebar">
+				<button class="primary" type="submit" form="settings" id="save">Save settings</button>
+				<button type="button" id="revert">Discard changes</button>
+				<span id="note"></span>
+			</div>
+		</main>
+
+		<script>
+			const $ = (sel) => document.querySelector(sel);
+			let data = null;
+			let dirty = false;
+
+			function el(tag, attrs = {}, text) {
+				const node = document.createElement(tag);
+				for (const [k, v] of Object.entries(attrs)) {
+					if (k === 'class') node.className = v;
+					else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+					else node.setAttribute(k, v);
+				}
+				if (text !== undefined) node.textContent = text;
+				return node;
+			}
+
+			function note(message, bad = false) {
+				const n = $('#note');
+				n.textContent = message;
+				n.className = bad ? 'bad' : '';
+			}
+
+			function gate(message, action) {
+				$('#app').classList.add('hidden');
+				$('#gate').classList.remove('hidden');
+				$('#gate-msg').textContent = message;
+				const box = $('#gate-action');
+				box.replaceChildren();
+				if (action) box.append(action);
+			}
+
+			async function api(path, options = {}) {
+				const res = await fetch(path, { credentials: 'same-origin', ...options });
+				const body = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
+				return { ok: res.ok, status: res.status, body };
+			}
+
+			async function boot() {
+				const session = await api('/api/session');
+				const s = session.body || {};
+				if (!s.signedIn) {
+					const link = el('a', { href: '/auth/freebuff/signin?returnTo=/', class: 'tag' }, '');
+					const btn = el('button', { class: 'primary', type: 'button', onclick: () => (location.href = '/auth/freebuff/signin?returnTo=/') }, 'Sign in with Freebuff');
+					gate('Sign in to control the relay.', btn);
+					return;
+				}
+				if (!s.isOwner && !s.claimable) {
+					gate(`Signed in as ${s.email || 'an unknown account'}. This dashboard belongs to another account.`, null);
+					return;
+				}
+				await load();
+			}
+
+			async function load() {
+				const res = await api('/api/dashboard');
+				if (res.status === 401) return boot();
+				if (!res.ok) return gate(res.body?.error || 'Could not load the dashboard.', null);
+				data = res.body;
+				$('#gate').classList.add('hidden');
+				$('#app').classList.remove('hidden');
+				$('#whoami').textContent = data.ownerEmail || '';
+				renderCards();
+				renderForm();
+				renderDevice();
+				note('');
+				dirty = false;
+			}
+
+			function renderCards() {
+				const st = data.state || {};
+				const cards = [
+					['Waiting to upload', st.pending ?? '—'],
+					['Uploaded so far', st.uploaded ?? '—'],
+					['Files in node', st.scan_total ?? '—'],
+					['Disk free', st.disk_free_mb ? `${st.disk_free_mb} MB` : '—'],
+					['Disk used', st.disk_used_pct || '—'],
+					['Relay', st.paused === 'true' ? 'paused' : st.paused === 'false' ? 'running' : '—'],
+					['Next run', st.timer_next || '—'],
+					['Google account', st.google === 'true' ? 'connected' : st.google === 'false' ? 'missing' : '—'],
+				];
+				const box = $('#cards');
+				box.replaceChildren();
+				for (const [k, v] of cards) {
+					const card = el('div', { class: 'card' });
+					card.append(el('div', { class: 'k' }, k));
+					const value = el('div', { class: 'v' }, String(v));
+					if (String(v).length > 9) value.classList.add('small');
+					card.append(value);
+					box.append(card);
+				}
+				if (st.reported_at) {
+					const when = new Date(st.reported_at);
+					note(`Last report from the VM: ${when.toLocaleString()}`);
+				} else {
+					note('The VM has not reported yet. If this stays empty, the agent is not paired.', true);
+				}
+			}
+
+			function renderDevice() {
+				const paired = data.device?.paired;
+				$('#device-state').textContent = paired
+					? 'A device token exists. The VM can read settings as soon as it has the token.'
+					: 'Not paired yet: generate a token, put it in the repository secret, then re-run the deploy.';
+				$('#gen-token').textContent = paired ? 'Rotate device token' : 'Generate device token';
+			}
+
+			function renderForm() {
+				const form = $('#settings');
+				form.replaceChildren();
+				const groups = new Map();
+				for (const field of data.schema) {
+					if (!groups.has(field.group)) groups.set(field.group, []);
+					groups.get(field.group).push(field);
+				}
+				for (const [group, fields] of groups) {
+					const set = el('fieldset');
+					set.append(el('legend', {}, group));
+					for (const field of fields) set.append(renderField(field));
+					form.append(set);
+				}
+			}
+
+			function renderField(field) {
+				const row = el('div', { class: 'row' });
+				const label = el('label', { for: `f-${field.key}` }, field.label);
+				row.append(label);
+
+				const right = el('div', { style: 'flex:1' });
+				const value = data.settings[field.key];
+				let input;
+
+				if (field.type === 'bool') {
+					input = el('input', { type: 'checkbox', id: `f-${field.key}` });
+					input.checked = value === 'true';
+				} else if (field.type === 'enum') {
+					input = el('select', { id: `f-${field.key}` });
+					for (const option of field.options) {
+						const o = el('option', { value: option }, option);
+						if (option === value) o.selected = true;
+						input.append(o);
+					}
+				} else if (field.type === 'int') {
+					input = el('input', {
+						type: 'number',
+						id: `f-${field.key}`,
+						min: String(field.min ?? 0),
+						max: String(field.max ?? 1000),
+						value: String(value ?? ''),
+					});
+				} else {
+					input = el('input', { type: 'text', id: `f-${field.key}`, value: String(value ?? ''), maxlength: '200' });
+				}
+
+				input.dataset.key = field.key;
+				input.dataset.type = field.type;
+				input.addEventListener('change', () => {
+					dirty = true;
+					note('Unsaved changes.');
+				});
+				if (field.type === 'bool') input.addEventListener('input', () => { dirty = true; note('Unsaved changes.'); });
+
+				right.append(input);
+				const help = el('div', { class: field.danger ? 'help danger' : 'help' }, field.help);
+				right.append(help);
+				row.append(right);
+				return row;
+			}
+
+			function collect() {
+				const out = {};
+				for (const input of document.querySelectorAll('[data-key]')) {
+					const { key, type } = input.dataset;
+					out[key] = type === 'bool' ? (input.checked ? 'true' : 'false') : input.value;
+				}
+				return out;
+			}
+
+			$('#settings').addEventListener('submit', async (event) => {
+				event.preventDefault();
+				$('#save').disabled = true;
+				note('Saving…');
+				const res = await api('/api/settings', {
+					method: 'PUT',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify(collect()),
+				});
+				$('#save').disabled = false;
+				if (!res.ok) {
+					note((res.body?.errors || [res.body?.error || 'Save failed']).join(' · '), true);
+					return;
+				}
+				data.settings = res.body.settings;
+				dirty = false;
+				note('Saved. The VM picks this up within a minute.');
+			});
+
+			$('#revert').addEventListener('click', () => load());
+
+			for (const button of document.querySelectorAll('[data-command]')) {
+				button.addEventListener('click', async () => {
+					button.disabled = true;
+					const res = await api('/api/commands', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ kind: button.dataset.command }),
+					});
+					button.disabled = false;
+					note(res.ok ? 'Queued. The VM runs it within a minute.' : res.body?.error || 'Could not queue that.', !res.ok);
+				});
+			}
+
+			$('#gen-token').addEventListener('click', async () => {
+				if (data.device?.paired && !confirm('The old token stops working immediately. Continue?')) return;
+				const res = await api('/api/device/token', { method: 'POST' });
+				if (!res.ok) return note(res.body?.error || 'Could not generate a token.', true);
+				$('#token-value').textContent = res.body.token;
+				$('#token-box').classList.remove('hidden');
+				data.device.paired = true;
+				renderDevice();
+			});
+
+			$('#signout').addEventListener('click', async () => {
+				const body = new URLSearchParams();
+				await fetch('/auth/freebuff/signout', { method: 'POST', credentials: 'same-origin', body });
+				location.reload();
+			});
+
+			window.addEventListener('beforeunload', (event) => {
+				if (dirty) event.preventDefault();
+			});
+
+			boot();
+		</script>
+	</body>
+</html>

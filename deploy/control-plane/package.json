@@ -1,0 +1,23 @@
+{
+  "name": "gotohp-control-plane",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "wrangler dev --config wrangler.jsonc --port 8787 --ip 127.0.0.1",
+    "start": "npm run build && npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@freebuff/auth": "^0.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "wrangler": "^4.157.0"
+  },
+  "private": true
+}

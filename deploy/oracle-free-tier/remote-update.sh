@@ -18,7 +18,8 @@ SRC=${1:?usage: remote-update.sh <staging-directory>}
 }
 
 for file in gotohp-cli sync.sh install.sh config.env.example \
-	gotohp-sync.service gotohp-sync.timer; do
+	gotohp-sync.service gotohp-sync.timer \
+	control-agent.sh gotohp-control.service gotohp-control.timer; do
 	[[ -f $SRC/$file ]] || {
 		echo "missing $SRC/$file" >&2
 		exit 1
@@ -31,6 +32,25 @@ if [[ -n ${SFTP_PASSWORD_FILE:-} && -r ${SFTP_PASSWORD_FILE} ]]; then
 	SFTP_PASSWORD=$(cat -- "$SFTP_PASSWORD_FILE")
 	export SFTP_PASSWORD
 	rm -f -- "$SFTP_PASSWORD_FILE"
+fi
+
+# Same treatment for the dashboard address and the device token: shipped as
+# root-only files, consumed here, deleted before anything else runs.
+if [[ -n ${CONTROL_URL_FILE:-} && -r ${CONTROL_URL_FILE} ]]; then
+	CONTROL_URL=$(tr -d '[:space:]' <"$CONTROL_URL_FILE")
+	rm -f -- "$CONTROL_URL_FILE"
+	if [[ ! $CONTROL_URL =~ ^https?:// ]]; then
+		echo "CONTROL_URL is not an http(s) address; ignoring it" >&2
+		CONTROL_URL=""
+	fi
+	export CONTROL_URL
+fi
+
+if [[ -n ${CONTROL_TOKEN_SOURCE:-} && -r ${CONTROL_TOKEN_SOURCE} ]]; then
+	install -d -m 0750 -o root -g gotohpsync /etc/gotohp-sync
+	install -m 0600 -o root -g root "$CONTROL_TOKEN_SOURCE" /etc/gotohp-sync/device.token
+	rm -f -- "$CONTROL_TOKEN_SOURCE"
+	echo "device token installed"
 fi
 
 # Stage the new binary and prove it runs before replacing the live one, so a
@@ -49,10 +69,24 @@ if ! id -u gotohpsync >/dev/null 2>&1 || [[ ! -s /etc/gotohp-sync/config.env ]];
 else
 	echo "==> updating an existing install"
 	install -m 0755 -o root -g root "$SRC/sync.sh" /usr/local/bin/gotohp-sync
+	install -m 0755 -o root -g root "$SRC/control-agent.sh" /usr/local/bin/gotohp-control
 	install -m 0644 -o root -g root "$SRC/gotohp-sync.service" /etc/systemd/system/gotohp-sync.service
 	install -m 0644 -o root -g root "$SRC/gotohp-sync.timer" /etc/systemd/system/gotohp-sync.timer
+	install -m 0644 -o root -g root "$SRC/gotohp-control.service" /etc/systemd/system/gotohp-control.service
+	install -m 0644 -o root -g root "$SRC/gotohp-control.timer" /etc/systemd/system/gotohp-control.timer
 	systemctl daemon-reload
 	systemctl enable --now gotohp-sync.timer >/dev/null 2>&1 || true
+	systemctl enable --now gotohp-control.timer >/dev/null 2>&1 || true
+
+	# The dashboard address can change when a site is recreated, so keep it in
+	# step with the deploy without disturbing the settings the dashboard wrote.
+	if [[ -n ${CONTROL_URL:-} ]]; then
+		if grep -q '^CONTROL_URL=' /etc/gotohp-sync/config.env; then
+			sed -i "s|^CONTROL_URL=.*|CONTROL_URL=$CONTROL_URL|" /etc/gotohp-sync/config.env
+		else
+			printf 'CONTROL_URL=%s\n' "$CONTROL_URL" >>/etc/gotohp-sync/config.env
+		fi
+	fi
 
 	# Restart the timer, not the service: a run that is mid-upload finishes on
 	# the old binary, which is harmless because every upload is idempotent.

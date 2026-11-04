@@ -97,6 +97,9 @@ install -d -m 0700 -o "$SYNC_USER" -g "$SYNC_USER" "$STATE_DIR"
 say "installing binaries"
 install -m 0755 -o root -g root "$BIN" /usr/local/bin/gotohp-cli
 install -m 0755 -o root -g root "$HERE/sync.sh" /usr/local/bin/gotohp-sync
+if [[ -f $HERE/control-agent.sh ]]; then
+	install -m 0755 -o root -g root "$HERE/control-agent.sh" /usr/local/bin/gotohp-control
+fi
 
 say "installing configuration"
 install -d -m 0750 -o root -g "$SYNC_USER" /etc/gotohp-sync
@@ -107,6 +110,16 @@ else
 		"$HERE/config.env.example" /etc/gotohp-sync/config.env
 	if [[ $SRC_DIR != /srv/watermelon/repo ]]; then
 		sed -i "s|^SRC_DIR=.*|SRC_DIR=$SRC_DIR|" /etc/gotohp-sync/config.env
+	fi
+fi
+
+# The dashboard address is deploy configuration, not a user setting, so it is
+# written here every time rather than being editable from the UI.
+if [[ -n ${CONTROL_URL:-} ]]; then
+	if grep -q '^CONTROL_URL=' /etc/gotohp-sync/config.env; then
+		sed -i "s|^CONTROL_URL=.*|CONTROL_URL=$CONTROL_URL|" /etc/gotohp-sync/config.env
+	else
+		printf 'CONTROL_URL=%s\n' "$CONTROL_URL" >>/etc/gotohp-sync/config.env
 	fi
 fi
 
@@ -183,8 +196,15 @@ fi
 say "installing systemd units"
 install -m 0644 "$HERE/gotohp-sync.service" /etc/systemd/system/gotohp-sync.service
 install -m 0644 "$HERE/gotohp-sync.timer" /etc/systemd/system/gotohp-sync.timer
+if [[ -f $HERE/gotohp-control.service ]]; then
+	install -m 0644 "$HERE/gotohp-control.service" /etc/systemd/system/gotohp-control.service
+	install -m 0644 "$HERE/gotohp-control.timer" /etc/systemd/system/gotohp-control.timer
+fi
 systemctl daemon-reload
 systemctl enable --now gotohp-sync.timer
+if [[ -f /etc/systemd/system/gotohp-control.timer ]]; then
+	systemctl enable --now gotohp-control.timer
+fi
 
 cat <<EOF
 

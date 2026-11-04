@@ -235,6 +235,46 @@ await test('accounts: credential is delivered once, selection is a command', asy
 	assert.match(after, /CMD \w+ creds-set old@example\.com/);
 });
 
+await test('history can be deleted, one entry or all of it, and the relay can clear its logs', async () => {
+	const { app } = makeApp();
+	const issued = await app(post('/api/device/token', {}, 'application/json', { origin: ORIGIN }), {});
+	const { token } = await issued.json();
+	const auth = { authorization: `Bearer ${token}` };
+
+	await app(post('/api/device/activity', { activity: { phase: 'uploading', total: 4, uploaded: 1 } }, 'application/json', auth), {});
+	const queued = await app(post('/api/commands', { kind: 'run-now' }, 'application/json', { origin: ORIGIN }), {});
+	const { command } = await queued.json();
+	await app(post('/api/device/result', `RESULT ${command.id} ok started\n`, 'text/plain', auth), {});
+
+	let live = await (await app(req('/api/activity'), {})).json();
+	assert.ok(live.events.length >= 2);
+	const victim = live.events[0];
+	assert.ok(victim.id, 'every event carries an id so one can be deleted');
+
+	// A foreign origin deletes nothing.
+	assert.equal((await app(req(`/api/events/${victim.id}`, { method: 'DELETE' }), {})).status, 403);
+
+	const single = await app(req(`/api/events/${victim.id}`, { method: 'DELETE', headers: { origin: ORIGIN } }), {});
+	assert.equal(single.status, 200);
+	live = await (await app(req('/api/activity'), {})).json();
+	assert.equal(live.events.some((e) => e.id === victim.id), false);
+	assert.equal((await app(req('/api/events/nosuchid', { method: 'DELETE', headers: { origin: ORIGIN } }), {})).status, 404);
+
+	const all = await app(req('/api/events', { method: 'DELETE', headers: { origin: ORIGIN } }), {});
+	assert.equal(all.status, 200);
+	live = await (await app(req('/api/activity'), {})).json();
+	assert.equal(live.events.length, 0);
+
+	const cmds = await app(req('/api/commands', { method: 'DELETE', headers: { origin: ORIGIN } }), {});
+	assert.equal((await cmds.json()).removed, live.commands.length);
+	live = await (await app(req('/api/activity'), {})).json();
+	assert.equal(live.commands.length, 0);
+
+	// Clearing the box's own logs is a command; anything else is refused.
+	assert.equal((await app(post('/api/commands', { kind: 'clear-log' }, 'application/json', { origin: ORIGIN }), {})).status, 200);
+	assert.equal((await app(post('/api/commands', { kind: 'rm -rf' }, 'application/json', { origin: ORIGIN }), {})).status, 400);
+});
+
 await test('unknown api paths 404, everything else falls through to static assets', async () => {
 	const { app } = makeApp();
 	assert.equal((await app(req('/api/nope'), {})).status, 404);

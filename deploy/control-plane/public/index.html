@@ -179,6 +179,7 @@
 			ul.acct .badge { width: 8px; height: 8px; border-radius: 50%; background: #ffffff1a; flex: 0 0 auto; }
 			ul.acct .badge.on { background: var(--accent); box-shadow: 0 0 0 3px #3ddc8422; }
 			ul.acct button { padding: 5px 10px; font-size: 12.5px; border-radius: 8px; }
+			.cleanup-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 8px; }
 			#cred-form { margin-top: 12px; }
 			#cred-form input[type="password"] {
 				width: 100%; font: 13px/1.4 var(--mono); color: var(--text); background: #0a1016;
@@ -277,6 +278,17 @@
 					<input type="password" id="cred-value" placeholder="oauth_token value" autocomplete="off" />
 					<button id="cred-save" type="button">Add this account</button>
 				</div>
+			</section>
+
+			<section class="card" id="cleanup-card" style="margin-bottom: 14px">
+				<h3>Delete</h3>
+				<p class="small muted">Removes history the dashboard keeps. Your files on the relay and your photos in Google Photos are never touched.</p>
+				<div class="cleanup-actions">
+					<button type="button" data-delete="events">Delete activity feed</button>
+					<button type="button" data-delete="commands">Delete command history</button>
+					<button type="button" data-command="clear-log">Delete relay logs</button>
+				</div>
+				<span class="small muted" id="cleanup-note"></span>
 			</section>
 
 			<form id="settings"><div class="groups" id="groups"></div></form>
@@ -731,6 +743,19 @@
 					});
 					button.disabled = false;
 					flash(res.ok ? 'Queued - the VM runs it within 20 seconds.' : res.body?.error || 'Could not queue that.', !res.ok);
+				});
+			}
+
+			for (const button of document.querySelectorAll('[data-delete]')) {
+				button.addEventListener('click', async () => {
+					const feed = button.dataset.delete === 'events';
+					if (!confirm(`Delete ${feed ? 'the whole activity feed' : 'the command history'}? This cannot be undone.`)) return;
+					button.disabled = true;
+					const res = await api(feed ? '/api/events' : '/api/commands', { method: 'DELETE' });
+					button.disabled = false;
+					if (!res.ok) return flash(res.body?.error || 'That did not work.', true);
+					$('#cleanup-note').textContent = res.body?.removed ? `Deleted ${res.body.removed} item(s).` : 'Nothing to delete.';
+					await tick();
 				});
 			}
 

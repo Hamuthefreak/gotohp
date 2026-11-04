@@ -17,7 +17,7 @@ const TEXT_HEAD = {
 	'cache-control': 'no-store',
 };
 
-const COMMAND_KINDS = ['run-now', 'refresh', 'rescan', 'creds-set', 'creds-remove'];
+const COMMAND_KINDS = ['run-now', 'refresh', 'rescan', 'creds-set', 'creds-remove', 'clear-log'];
 
 /** Credentials are account emails; nothing else ever reaches a shell. */
 const EMAIL = /^[A-Za-z0-9._%+@-]{3,120}$/;
@@ -176,7 +176,8 @@ export function createApp(config) {
 
 	async function pushEvent(kind, message) {
 		const events = await kjson('events', []);
-		events.push({ t: now(), kind, message: str(message, 200) });
+		// An id is what lets the dashboard delete one entry instead of all of them.
+		events.push({ id: crypto.randomUUID().slice(0, 8), t: now(), kind, message: str(message, 200) });
 		await ksetjson('events', events.slice(-EVENT_LIMIT));
 	}
 
@@ -312,6 +313,37 @@ export function createApp(config) {
 			await ksetjson('commands', commands.slice(-50));
 			await pushEvent('command', needsArg ? `Queued "${kind}" for ${arg}` : `Queued "${kind}" for the relay`);
 			return json({ ok: true, command: entry });
+		}
+
+		// ---- deleting the dashboard's own records --------------------------
+
+		// Deliberately narrow: this drops history the dashboard keeps, never a
+		// file on the relay and never anything in Google Photos. Emptying the
+		// relay's own logs is a command, because only the box can do that.
+		if ((path === '/api/events' || path.startsWith('/api/events/') || path === '/api/commands') && method === 'DELETE') {
+			if (!sameOrigin(request)) return json({ error: 'cross-origin request rejected' }, 403);
+			const who = await owner(request, env);
+			if (who.error) return who.error;
+
+			if (path === '/api/commands') {
+				// A command the relay has not picked up yet is still work to do.
+				const commands = await kjson('commands', []);
+				const kept = commands.filter((c) => !c.done);
+				await ksetjson('commands', kept);
+				return json({ ok: true, removed: commands.length - kept.length });
+			}
+
+			const events = await kjson('events', []);
+			if (path === '/api/events') {
+				await ksetjson('events', []);
+				return json({ ok: true, removed: events.length });
+			}
+
+			const id = decodeURIComponent(path.slice('/api/events/'.length));
+			const kept = events.filter((e) => e.id !== id);
+			if (kept.length === events.length) return json({ error: 'no such event' }, 404);
+			await ksetjson('events', kept);
+			return json({ ok: true, removed: 1 });
 		}
 
 		if (path === '/api/device/token' && method === 'GET') {

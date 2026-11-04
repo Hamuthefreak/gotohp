@@ -1,5 +1,5 @@
 [Unit]
-Description=gotohp relay control agent (pull settings from the dashboard)
+Description=gotohp relay control agent (pull settings, report live activity)
 Documentation=https://github.com/Hamuthefreak/gotohp/tree/main/deploy/control-plane
 After=network-online.target gotohp-sync.timer
 Wants=network-online.target
@@ -8,6 +8,6 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/usr/local/bin/gotohp-control
 # Never stall the box on a slow dashboard: the unit gives up and the timer
-# tries again next minute.
-TimeoutStartSec=60
+# tries again on the next tick.
+TimeoutStartSec=45
 Nice=10

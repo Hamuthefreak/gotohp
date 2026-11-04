@@ -25,6 +25,7 @@ log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 warn() { log "WARN: $*" >&2; }
 die() {
 	log "ERROR: $*" >&2
+	[[ -n ${ACTIVITY:-} ]] && write_activity error 0 0 "" "$*" 2
 	exit 2
 }
 
@@ -85,8 +86,42 @@ ELIGIBLE=$STATE_DIR/eligible.tmp
 LAST_RESULT=$STATE_DIR/last-run.json
 GOTOHP_LOG=$STATE_DIR/gotohp.log
 FAILURES_LOG=$STATE_DIR/failures.log
+ACTIVITY=$STATE_DIR/activity.json
+RUN_ID=$(date -u +%Y%m%dT%H%M%SZ).$$
+RUN_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 touch "$LEDGER"
+
+# The CLI log is append-only and a long backfill can make it large; keep the
+# tail the dashboard actually shows and nothing more.
+if [[ -f $GOTOHP_LOG ]] && (($(wc -c <"$GOTOHP_LOG") > 1048576)); then
+	tail -c 262144 "$GOTOHP_LOG" >"$GOTOHP_LOG.trim" && mv -f "$GOTOHP_LOG.trim" "$GOTOHP_LOG"
+fi
+
+# --- live activity ---------------------------------------------------------
+# One small JSON file describes what this run is doing right now. The control
+# agent ships it to the dashboard, which is how a browser sees "uploading 12 of
+# 300" instead of only the result of the last finished run. Best effort: it
+# must never be the reason an upload stops.
+json_text() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\010\013\014\016-\037'
+}
+
+write_activity() {
+	local phase=$1 up=${2:-0} pend=${3:-0} current=${4:-} message=${5:-} code=${6:-null}
+	local batch=${7:-0} batches=${8:-0} tmp
+	tmp=$(mktemp "$STATE_DIR/activity.XXXXXX" 2>/dev/null) || return 0
+	printf '{"run_id":"%s","phase":"%s","started_at":"%s","updated_at":"%s","total":%d,"uploaded":%d,"pending":%d,"batches":%d,"batch":%d,"current":"%s","message":"%s","exit":%s}\n' \
+		"$RUN_ID" "$phase" "$RUN_STARTED" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		"${settled:-0}" "$up" "$pend" "$batches" "$batch" \
+		"$(json_text "$current")" "$(json_text "$message")" "$code" >"$tmp" 2>/dev/null || {
+		rm -f "$tmp"
+		return 0
+	}
+	chmod 0640 "$tmp" 2>/dev/null || true
+	mv -f "$tmp" "$ACTIVITY" 2>/dev/null || rm -f "$tmp"
+	return 0
+}
 
 # Extensions Google Photos accepts, mirroring core/upload.go supportedFormats.
 # Everything else Watermelon stores in the node (.watermelon_manifest.sqlite,
@@ -175,12 +210,14 @@ note_failure() {
 	} >>"$FAILURES_LOG"
 }
 
+write_activity scanning 0 0 "" "scanning the node"
 scan_repo "$CURRENT"
 total_media=$(wc -l <"$CURRENT" | tr -d ' ')
 
 if [[ ! -f $PREVIOUS ]]; then
 	log "first run: found $total_media media file(s); nothing is uploaded until the next pass confirms they are complete"
 	mv "$CURRENT" "$PREVIOUS"
+	write_activity idle 0 "$total_media" "" "first run: waiting for a second scan" 0
 	exit 0
 fi
 
@@ -190,6 +227,7 @@ settled=$(wc -l <"$ELIGIBLE" | tr -d ' ')
 if ((settled == 0)); then
 	log "$total_media media file(s) in the node, nothing new and complete to upload"
 	mv "$CURRENT" "$PREVIOUS"
+	write_activity idle 0 "$total_media" "" "nothing new to upload" 0
 	exit 0
 fi
 
@@ -198,6 +236,7 @@ log "$settled file(s) waiting for upload"
 if [[ $DRY_RUN == true ]]; then
 	log "DRY_RUN: would upload in batches of $BATCH_SIZE, first 10:"
 	sed -n '1,10p' "$ELIGIBLE"
+	write_activity idle 0 "$settled" "" "dry run: $settled file(s) would be uploaded" 0
 	exit 0
 fi
 
@@ -206,14 +245,19 @@ mapfile -t files <"$ELIGIBLE"
 uploaded=0
 pending=0
 network_suspect=false
+batches=$(((${#files[@]} + BATCH_SIZE - 1) / BATCH_SIZE))
+batch_index=0
+write_activity uploading 0 "$settled" "" "uploading ${#files[@]} file(s) in $batches batch(es)" null 0 "$batches"
 
 for ((offset = 0; offset < ${#files[@]}; offset += BATCH_SIZE)); do
 	batch=("${files[@]:offset:BATCH_SIZE}")
+	batch_index=$((batch_index + 1))
 
 	if upload "${batch[@]}"; then
 		mark_uploaded "${batch[@]}"
 		uploaded=$((uploaded + ${#batch[@]}))
 		log "batch of ${#batch[@]} uploaded (${uploaded}/${settled} this run)"
+		write_activity uploading "$uploaded" "$pending" "${batch[0]}" "uploading" null "$batch_index" "$batches"
 		continue
 	fi
 
@@ -234,6 +278,7 @@ for ((offset = 0; offset < ${#files[@]}; offset += BATCH_SIZE)); do
 			mark_uploaded "${batch[$probe]}"
 			uploaded=$((uploaded + 1))
 			probe_ok=$((probe_ok + 1))
+			write_activity uploading "$uploaded" "$pending" "${batch[$probe]}" "uploading" null "$batch_index" "$batches"
 		else
 			probe_failed+=("${batch[$probe]}")
 			note_failure "${batch[$probe]}"
@@ -254,9 +299,11 @@ for ((offset = 0; offset < ${#files[@]}; offset += BATCH_SIZE)); do
 	done
 
 	for path in "${batch[@]:probe_count}"; do
+		write_activity uploading "$uploaded" "$pending" "$path" "uploading" null "$batch_index" "$batches"
 		if upload "$path"; then
 			mark_uploaded "$path"
 			uploaded=$((uploaded + 1))
+			write_activity uploading "$uploaded" "$pending" "$path" "uploading" null "$batch_index" "$batches"
 		else
 			note_failure "$path"
 			warn "'$path' failed on its own; kept for the next run"
@@ -271,6 +318,11 @@ log "done: uploaded $uploaded, still pending $pending"
 
 if [[ $network_suspect == true ]]; then
 	warn "stopped early: every file in the batch failed. Check the account and the network; see $FAILURES_LOG"
+	write_activity error "$uploaded" "$pending" "" "every file in the batch failed: is the Google account still connected?" 1 "$batch_index" "$batches"
 	exit 1
 fi
-((pending == 0)) || exit 1
+if ((pending > 0)); then
+	write_activity error "$uploaded" "$pending" "" "$pending file(s) could not upload and stay pending" 1 "$batch_index" "$batches"
+	exit 1
+fi
+write_activity idle "$uploaded" 0 "" "uploaded $uploaded file(s)" 0 "$batch_index" "$batches"

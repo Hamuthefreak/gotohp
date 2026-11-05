@@ -14,6 +14,10 @@
 #     cannot hold back a whole month
 #   * nothing is ever parked or skipped silently: a file that cannot upload
 #     stays pending, is retried, and keeps the unit red until it is dealt with
+#   * no single gotohp call can hang the whole night: it is stopped after
+#     UPLOAD_TIMEOUT, and a batch that fails outright is retried after a pause
+#   * a node too full to accept the next file says so once, instead of failing
+#     every upload for its own reason
 #
 # Exit status: 0 = nothing to do, or all pending files uploaded.
 #              1 = at least one file is still pending (files are kept).
@@ -60,6 +64,25 @@ UPLOAD_INCOMPLETE_LIVE=${UPLOAD_INCOMPLETE_LIVE:-false}
 UPDATE_EXISTING_TO_LIVE=${UPDATE_EXISTING_TO_LIVE:-false}
 IGNORE_APPLE_METADATA=${IGNORE_APPLE_METADATA:-false}
 LOG_LEVEL=${LOG_LEVEL:-warn}
+
+# No single gotohp invocation may run forever. A connection can stall without
+# ever closing, and a hung CLI inside a oneshot unit would stop the timer from
+# ever firing again - one dead upload would silence the relay for the night. A
+# generous per-call limit turns that into a failed batch, which is retried.
+# 0 disables the limit (not recommended).
+UPLOAD_TIMEOUT=${UPLOAD_TIMEOUT:-1800}
+
+# A whole batch failing is often a blip - the link drops, Google answers 429, the
+# router restarts. An unattended run waits and tries the batch again before it
+# decides the account or the network is gone and ends early.
+NETWORK_RETRIES=${NETWORK_RETRIES:-2}
+NETWORK_RETRY_DELAY=${NETWORK_RETRY_DELAY:-30}
+
+# Below this much free space on the node nothing new can arrive, so a run that
+# cannot free any is stopped with a reason instead of reporting hundreds of
+# unrelated upload failures. Deletion makes this a warning: uploading is what
+# frees the space then.
+MIN_FREE_MB=${MIN_FREE_MB:-500}
 
 [[ -d $SRC_DIR ]] || die "SRC_DIR '$SRC_DIR' is not a directory"
 [[ -x $GOTOHP_BIN ]] || die "GOTOHP_BIN '$GOTOHP_BIN' is not executable"
@@ -219,6 +242,13 @@ upload() {
 		[[ $IGNORE_APPLE_METADATA == true ]] && cmd+=(--ignore-apple-metadata)
 	fi
 
+	# Wrapped rather than trusted: see UPLOAD_TIMEOUT. timeout(1) is util-linux,
+	# the same package flock comes from, and the relay still works without it.
+	local -a limiter=()
+	if ((UPLOAD_TIMEOUT > 0)) && command -v timeout >/dev/null 2>&1; then
+		limiter=(timeout --kill-after=60s "$UPLOAD_TIMEOUT")
+	fi
+
 	# Paths come from the scan relative to SRC_DIR, and gotohp-cli stats every
 	# path it is handed. The service runs with no working directory, so a relative
 	# path resolved against / and the whole batch was rejected as an invalid
@@ -235,7 +265,15 @@ upload() {
 		fi
 	done
 
-	"${cmd[@]}" -- "${absolute[@]}" >"$LAST_RESULT" 2>>"$GOTOHP_LOG"
+	# Captured with || rather than from an if: the status of an if with no else
+	# branch is 0 even when its condition failed, which would report every
+	# failed upload as a success.
+	local rc=0
+	"${limiter[@]}" "${cmd[@]}" -- "${absolute[@]}" >"$LAST_RESULT" 2>>"$GOTOHP_LOG" || rc=$?
+	if ((rc == 124 || rc == 137)); then
+		warn "gotohp did not finish in ${UPLOAD_TIMEOUT}s and was stopped; what it was working on stays pending"
+	fi
+	return "$rc"
 }
 
 mark_uploaded() {
@@ -340,6 +378,40 @@ fi
 
 mapfile -t files <"$ELIGIBLE"
 
+# The node has to be able to accept the next file Watermelon sends. Checked
+# after the scan so an idle run never trips it, and before the first upload so a
+# full disk is one clear message rather than every file failing for its own
+# reason.
+check_disk_room() {
+	local free_mb
+	free_mb=$(df -Pm "$SRC_DIR" 2>/dev/null | awk 'NR == 2 { print $4 }') || free_mb=""
+	[[ $free_mb =~ ^[0-9]+$ ]] || return 0
+	((free_mb < MIN_FREE_MB)) || return 0
+
+	if [[ $DELETE_AFTER_UPLOAD == true ]]; then
+		warn "only ${free_mb} MB free on the node; uploading frees space as each file is confirmed"
+		return 0
+	fi
+	die "only ${free_mb} MB free on the node and nothing is set to free it; turn on DELETE_AFTER_UPLOAD or add space before it refuses new files"
+}
+
+# Try the same batch again after a pause. Returns non-zero when the attempt was
+# the last one, so the caller can keep the files and end the run.
+retry_batch() {
+	local attempt=$1
+	shift
+
+	local delay=$((NETWORK_RETRY_DELAY * attempt))
+	if ((delay > 0)); then
+		warn "retrying the batch in ${delay}s (attempt $attempt of $NETWORK_RETRIES)"
+		write_activity uploading "$uploaded" "$pending" "" "batch failed; retrying in ${delay}s" null "$batch_index" "$batches"
+		sleep "$delay"
+	fi
+	upload "$@"
+}
+
+check_disk_room
+
 uploaded=0
 pending=0
 network_suspect=false
@@ -384,6 +456,24 @@ for ((offset = 0; offset < ${#files[@]}; offset += BATCH_SIZE)); do
 	done
 
 	if ((probe_ok == 0)); then
+		# Nothing in the batch can go through, which is what a blip looks like.
+		# Pause and hand it over once more before blaming the account.
+		recovered=false
+		for ((attempt = 1; attempt <= NETWORK_RETRIES; attempt++)); do
+			if retry_batch "$attempt" "${batch[@]}"; then
+				recovered=true
+				break
+			fi
+		done
+
+		if [[ $recovered == true ]]; then
+			mark_uploaded "${batch[@]}"
+			uploaded=$((uploaded + ${#batch[@]}))
+			log "batch of ${#batch[@]} uploaded after a retry ($((uploaded))/${settled} this run)"
+			write_activity uploading "$uploaded" "$pending" "${batch[0]}" "uploading" null "$batch_index" "$batches"
+			continue
+		fi
+
 		warn "gotohp could not upload any file in this batch; keeping all ${#batch[@]} file(s) and treating it as an account or network problem"
 		note_failure "batch of ${#batch[@]}"
 		network_suspect=true

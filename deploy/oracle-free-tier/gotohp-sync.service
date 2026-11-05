@@ -11,8 +11,11 @@ Group=gotohpsync
 Environment=GOTOHP_SYNC_CONFIG=/etc/gotohp-sync/config.env
 ExecStart=/usr/local/bin/gotohp-sync
 
-# A first push of a whole library can take hours; later runs are minutes.
-TimeoutStartSec=12h
+# A first push of a whole library can take hours, and a night's backup must not
+# be cut off halfway. Hangs are bounded per gotohp invocation by UPLOAD_TIMEOUT
+# in the relay instead, so this unit no longer needs to guillotine a long run -
+# a stalled upload becomes a failed batch that is retried, not a killed night.
+TimeoutStartSec=infinity
 
 # Uploading is I/O bound and must never starve the box that is also serving
 # SFTP from the phone.

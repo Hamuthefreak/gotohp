@@ -227,8 +227,13 @@ arrival time:
    file carries no date it recognises; tell me which one and `media-date.py`
    grows a reader for it.
 
-Only then start the full backup. A first full push can take hours; the service
-timeout is 12 h and the timer picks up where it left off.
+Only then start the full backup. A first full push can take hours, and the unit
+has no wall-clock limit, so an overnight run is never cut off halfway. What
+carries it is narrower: each gotohp invocation is stopped after `UPLOAD_TIMEOUT`
+(30 min) instead of being allowed to hang forever, a batch that fails outright is
+retried twice after a pause before the account is blamed, and a node with less
+than `MIN_FREE_MB` free stops the run with one clear reason rather than
+reporting hundreds of failed files.
 
 ## 8. Day-2 operations
 

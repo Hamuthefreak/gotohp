@@ -283,6 +283,92 @@ echo plain >"$BASE/repo/2024/07/IMG_PLAIN.JPG"
 run
 ck "a file with no metadata keeps its arrival mtime" "[[ $(year_of "$BASE/repo/2024/07/IMG_PLAIN.JPG") -eq 2026 ]]"
 
+echo "== a stalled upload is cut off instead of running forever =="
+cat >"$BASE/hang-gotohp" <<'STUB'
+#!/usr/bin/env bash
+printf 'CALL %s\n' "$*" >>"$FAKE_LOG"
+sleep 30
+STUB
+chmod +x "$BASE/hang-gotohp"
+mkdir -p "$BASE/repo4/2024/10" "$BASE/state4"
+echo slow >"$BASE/repo4/2024/10/IMG_0700.JPG"
+cat >"$BASE/hang.env" <<ENV
+SRC_DIR=$BASE/repo4
+STATE_DIR=$BASE/state4
+GOTOHP_BIN=$BASE/hang-gotohp
+GOTOHP_CONFIG=$BASE/state/gotohp.config
+BATCH_SIZE=50
+UPLOAD_TIMEOUT=1
+NETWORK_RETRY_DELAY=0
+ENV
+: >"$FAKE_LOG"
+run "$BASE/hang.env"
+ck "the first pass still only snapshots" "[[ $(calls) -eq 0 ]]"
+run "$BASE/hang.env"
+ck "a stalled gotohp is stopped, not waited on" "grep -q 'did not finish in 1s' $BASE/out"
+ck "what it was working on stays pending" "! grep -q IMG_0700 $BASE/state4/uploaded.tsv"
+ck "the run reports the failure" "[[ $RC -eq 1 ]]"
+
+echo "== a blip inside the run is retried instead of ending it =="
+cat >"$BASE/flaky-gotohp" <<'STUB'
+#!/usr/bin/env bash
+printf 'CALL %s\n' "$*" >>"$FAKE_LOG"
+n=$(( $(cat "$FLAKY_COUNT" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" >"$FLAKY_COUNT"
+if ((n <= ${FAIL_UNTIL:-0})); then
+	echo '{"failed":1,"error":"simulated blip"}'
+	exit 1
+fi
+echo '{"succeeded":1}'
+exit 0
+STUB
+chmod +x "$BASE/flaky-gotohp"
+mkdir -p "$BASE/repo5/2024/10" "$BASE/state5"
+echo blip >"$BASE/repo5/2024/10/IMG_0800.JPG"
+printf '0\n' >"$BASE/flaky.count"
+cat >"$BASE/flaky.env" <<ENV
+SRC_DIR=$BASE/repo5
+STATE_DIR=$BASE/state5
+GOTOHP_BIN=$BASE/flaky-gotohp
+GOTOHP_CONFIG=$BASE/state/gotohp.config
+BATCH_SIZE=50
+NETWORK_RETRY_DELAY=0
+export FLAKY_COUNT=$BASE/flaky.count
+# One batch call plus its single probe, then the blip is over: the retry has to
+# be what succeeds, not the normal path.
+export FAIL_UNTIL=2
+ENV
+: >"$FAKE_LOG"
+run "$BASE/flaky.env"
+run "$BASE/flaky.env"
+ck "a blip does not end the run early" "! grep -q 'stopped early' $BASE/out"
+ck "the retry uploads the batch" "grep -q 'uploaded after a retry' $BASE/out"
+ck "the file is recorded once" "[[ $(grep -c IMG_0800 $BASE/state5/uploaded.tsv) -eq 1 ]]"
+ck "a recovered run exits 0" "[[ $RC -eq 0 ]]"
+
+echo "== a node with no room left is one clear message =="
+mkdir -p "$BASE/repo6/2024/10" "$BASE/state6" "$BASE/state7"
+echo full >"$BASE/repo6/2024/10/IMG_0900.JPG"
+cat >"$BASE/tight.env" <<ENV
+SRC_DIR=$BASE/repo6
+STATE_DIR=$BASE/state6
+GOTOHP_BIN=$BASE/fake-gotohp
+GOTOHP_CONFIG=$BASE/state/gotohp.config
+BATCH_SIZE=50
+MIN_FREE_MB=99999999
+ENV
+sed "s|$BASE/state6|$BASE/state7|" "$BASE/tight.env" >"$BASE/tightdel.env"
+echo "DELETE_AFTER_UPLOAD=true" >>"$BASE/tightdel.env"
+: >"$FAKE_LOG"
+run "$BASE/tight.env"
+run "$BASE/tight.env"
+ck "a full node stops the run with a reason" "[[ $RC -eq 2 ]] && grep -q 'nothing is set to free it' $BASE/out"
+ck "nothing is uploaded into a full node" "! grep -q IMG_0900 $BASE/state6/uploaded.tsv"
+run "$BASE/tightdel.env"
+run "$BASE/tightdel.env"
+ck "with deletion on it warns instead" "grep -q 'uploading frees space' $BASE/out"
+ck "and the file uploads, which frees the space" "grep -q IMG_0900.JPG $BASE/state7/uploaded.tsv"
+
 echo "== a bad log level is refused =="
 cp "$BASE/test.env" "$BASE/badlevel.env"
 echo "LOG_LEVEL=loud" >>"$BASE/badlevel.env"

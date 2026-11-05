@@ -363,6 +363,8 @@ entry in `src/schema.js`, one flag in `sync.sh`, one check in `test-sync.sh`.
 | Photos dated today | the file carried no date `media-date.py` recognises, so mtime is still the arrival time | extend `media-date.py`, or check `journalctl` for the `dated N of M` line |
 | Instance stopped itself after a week | idle reclamation | upgrade to Pay As You Go (step 2.2) |
 | `No space left on device` | library > boot volume | set `DELETE_AFTER_UPLOAD=true` in `/etc/gotohp-sync/config.env` and relay one month at a time |
+| `local-cleanup-failed` in `failures.log` | the upload worked, but removing the local copy did not: the relay user is not in the group that owns the node's directories | re-run **Deploy relay to VM** (it re-asserts the group on every run). The photo is already in Google Photos either way - this error is about the VM's disk, never about the library |
+| `dated 0 of N` on every run | the relay cannot set mtimes on files it does not own, so uploads would be dated by arrival | re-run the deploy; the unit ships `AmbientCapabilities=CAP_FOWNER` for exactly this |
 
 ## 10. Things that bite later
 

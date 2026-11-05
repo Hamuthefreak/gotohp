@@ -145,6 +145,15 @@ if [[ $WITH_SFTP == true ]]; then
 	install -d -m 0755 -o root -g root "$CHROOT"
 	install -d -m 0755 -o "$SFTP_USER" -g "$SFTP_USER" "$SRC_DIR"
 
+	# Removing an uploaded file needs write permission on its directory, not on
+	# the file, and every directory in the node belongs to the SFTP user. So the
+	# relay joins that group rather than taking the node over: Watermelon keeps
+	# owning its own manifests and can still restore to the phone.
+	if [[ $SFTP_USER != "$SYNC_USER" ]]; then
+		usermod -aG "$SFTP_USER" "$SYNC_USER" &&
+			echo "$SYNC_USER is in group $SFTP_USER (so it can remove uploaded files)"
+	fi
+
 	# sshd refuses a chroot that the user can write to, and needs the account to
 	# authenticate by password (the app cannot use a key prompt).
 	if [[ -z $(passwd -S "$SFTP_USER" | awk '$2 == "P"') ]]; then

@@ -21,6 +21,13 @@ TimeoutStartSec=infinity
 # SFTP from the phone.
 Nice=10
 IOSchedulingClass=idle
+
+# The date pass stamps each file's mtime with the date stored inside it, and the
+# files belong to the SFTP user. Setting a timestamp is an ownership check, not a
+# write check, so without this the pass silently does nothing ("dated 0 of N" on
+# every run) and every photo is dated by the time it arrived. It grants nothing
+# over file contents: only permission to set times on files it can already read.
+AmbientCapabilities=CAP_FOWNER
 UMask=0077
 NoNewPrivileges=yes
 

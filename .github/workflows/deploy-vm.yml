@@ -46,6 +46,9 @@ jobs:
       - name: Test the relay script
         run: bash deploy/oracle-free-tier/test-sync.sh
 
+      - name: Test the SFTP tuning script
+        run: bash deploy/oracle-free-tier/test-tuning.sh
+
       - name: Build gotohp-cli
         run: |
           set -euo pipefail
@@ -126,6 +129,7 @@ jobs:
             deploy/oracle-free-tier/gotohp-sync.timer \
             deploy/oracle-free-tier/control-agent.sh \
             deploy/oracle-free-tier/media-date.py \
+            deploy/oracle-free-tier/sftp-tuning.sh \
             deploy/oracle-free-tier/gotohp-control.service \
             deploy/oracle-free-tier/gotohp-control.timer \
             deploy/oracle-free-tier/remote-update.sh \

@@ -20,7 +20,8 @@ SYNC_CONF=${GOTOHP_SYNC_CONFIG:-/etc/gotohp-sync/config.env}
 
 for file in gotohp-cli sync.sh install.sh config.env.example \
 	gotohp-sync.service gotohp-sync.timer \
-	control-agent.sh gotohp-control.service gotohp-control.timer media-date.py; do
+	control-agent.sh gotohp-control.service gotohp-control.timer media-date.py \
+	sftp-tuning.sh; do
 	[[ -f $SRC/$file ]] || {
 		echo "missing $SRC/$file" >&2
 		exit 1
@@ -83,6 +84,7 @@ else
 	install -m 0755 -o root -g root "$SRC/sync.sh" /usr/local/bin/gotohp-sync
 	install -m 0755 -o root -g root "$SRC/media-date.py" /usr/local/bin/gotohp-media-date
 	install -m 0755 -o root -g root "$SRC/control-agent.sh" /usr/local/bin/gotohp-control
+	install -m 0755 -o root -g root "$SRC/sftp-tuning.sh" /usr/local/bin/gotohp-sftp-tuning
 	install -m 0644 -o root -g root "$SRC/gotohp-sync.service" /etc/systemd/system/gotohp-sync.service
 	install -m 0644 -o root -g root "$SRC/gotohp-sync.timer" /etc/systemd/system/gotohp-sync.timer
 	install -m 0644 -o root -g root "$SRC/gotohp-control.service" /etc/systemd/system/gotohp-control.service
@@ -100,6 +102,12 @@ else
 			printf 'CONTROL_URL=%s\n' "$CONTROL_URL" >>/etc/gotohp-sync/config.env
 		fi
 	fi
+
+	# Applied on every deploy, not only at bootstrap: an existing box would
+	# otherwise never pick up a new kernel or sshd setting. It is idempotent and
+	# never fails the deploy - a tuning problem must not hold back the relay.
+	bash "$SRC/sftp-tuning.sh" ||
+		echo "warning: sftp-tuning.sh did not apply; the relay is unaffected" >&2
 
 	# Restart the timer, not the service: a run that is mid-upload finishes on
 	# the old binary, which is harmless because every upload is idempotent.

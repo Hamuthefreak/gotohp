@@ -207,6 +207,38 @@ on the relay VM* with
 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` and match the `SHA256:...`
 it prints.
 
+### If the uploads from the phone feel slow
+
+Watermelon sends originals as one long-lived SFTP connection, so the rate is the
+phone's own uplink unless something on this end is adding delay. `sftp-tuning.sh`
+(installed as `gotohp-sftp-tuning`, re-applied by every deploy) removes the
+part this box contributes:
+
+| What | Why |
+| --- | --- |
+| 16 MB TCP window instead of 6 MB, `bbr`/`fq` where the kernel has them | one stream is not capped by the round-trip time to the region |
+| `tcp_slow_start_after_idle=0` | a backup goes quiet between files; without this the transfer restarts from a small window each time it resumes |
+| `tcp_mtu_probing=1` | a mobile path that black-holes large packets recovers instead of stalling |
+| `Compression no` | photos and videos are already compressed |
+| `RekeyLimit 4G`, `ClientAlive*` for the `watermelon` user only | no rekey stall mid-file, and a phone that left the network is noticed in minutes |
+
+It does not widen the uplink, and it changes nothing about what the relay
+accepts or where it writes. Measure before believing - this prints how many
+bytes actually arrived in the last hour, which is the rate the phone managed:
+
+```shell
+sudo find /srv/watermelon/repo -type f -newermt '-1 hour' -printf '%s\n' |
+  awk '{s+=$1} END {printf "%.1f MB in the last hour\n", s/1048576}'
+```
+
+Run that during a backup (*Run a command on the relay VM*). If it sits at your
+home upload speed, the phone is the limit and neither the box nor the relay can
+go faster. Undo everything with:
+
+```shell
+sudo gotohp-sftp-tuning --revert
+```
+
 ## 7. Prove the date before the whole library
 
 gotohp takes a photo's Google Photos date from the file **mtime** (`--date-from-filename`

@@ -166,6 +166,12 @@ sudo journalctl -u gotohp-sync.service -f
   broken night costs time, never photos.
 - **One run at a time** (`flock`). Uploads run at `Nice=10` / idle I/O so they
   cannot starve the SFTP side.
+- **The receiving side is tuned, not throttled.** `sftp-tuning.sh` (installed as
+  `gotohp-sftp-tuning`, re-applied on every deploy) sizes the TCP window for a
+  long path, stops the congestion window restarting after every quiet gap, turns
+  on MTU probing, and skips compression and the 1 GB rekey stall for the phone's
+  SFTP sessions. It cannot widen the phone's uplink - that is usually the real
+  limit - and it never touches what the relay accepts or where it writes.
 
 State lives in `/var/lib/gotohp-sync` (`uploaded.tsv`, `scan.previous`,
 `last-run.json`, `failures.log`, `gotohp.log`). Useful commands:
@@ -226,6 +232,8 @@ running several relays means several service users, which this does not do.
 | `config.env.example` | All tunables, documented. |
 | `test-sync.sh` | Contract tests for `sync.sh` with a stub uploader. |
 | `SETUP.md` | Account creation to working relay, step by step. |
+| `sftp-tuning.sh` | Kernel/sshd settings for the phone's SFTP sessions; `--revert` undoes it. |
+| `test-tuning.sh` | Contract tests for `sftp-tuning.sh`, with stubbed sshd and sysctl. |
 | `remote-update.sh` | Runs on the VM; bootstraps on first run, then only swaps the binary and units. |
 
 The workflow side is `.github/workflows/deploy-vm.yml` (test, build both

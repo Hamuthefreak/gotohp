@@ -104,6 +104,9 @@ fi
 if [[ -f $HERE/media-date.py ]]; then
 	install -m 0755 -o root -g root "$HERE/media-date.py" /usr/local/bin/gotohp-media-date
 fi
+if [[ -f $HERE/sftp-tuning.sh ]]; then
+	install -m 0755 -o root -g root "$HERE/sftp-tuning.sh" /usr/local/bin/gotohp-sftp-tuning
+fi
 
 say "installing configuration"
 install -d -m 0750 -o root -g "$SYNC_USER" /etc/gotohp-sync
@@ -194,6 +197,15 @@ EOF
 	fi
 	systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null ||
 		echo "reload sshd manually to apply $DROPIN" >&2
+
+	# The kernel and sshd knobs that stop this box from adding delay to the
+	# phone's uploads. Non-fatal on purpose: without them SFTP works exactly as
+	# before, just no faster than the defaults.
+	if [[ -f $HERE/sftp-tuning.sh ]]; then
+		say "tuning the SFTP side"
+		bash "$HERE/sftp-tuning.sh" --user "$SFTP_USER" ||
+			echo "warning: sftp-tuning.sh did not apply; SFTP itself is unaffected" >&2
+	fi
 
 fi
 

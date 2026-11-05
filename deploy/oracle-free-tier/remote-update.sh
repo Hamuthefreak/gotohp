@@ -103,6 +103,20 @@ else
 		fi
 	fi
 
+	# Removing an uploaded file needs write permission on its directory, and the
+	# node's directories belong to the SFTP user. Membership is idempotent, and it
+	# is re-asserted on every deploy because an existing box would otherwise keep
+	# "local-cleanup-failed": the upload succeeds and the local copy stays.
+	node_dir=$(sed -n 's/^SRC_DIR=//p' "$SYNC_CONF" 2>/dev/null | tail -n 1)
+	node_dir=${node_dir:-/srv/watermelon/repo}
+	if [[ -d $node_dir ]]; then
+		node_group=$(stat -c %G -- "$node_dir")
+		if [[ -n $node_group && $node_group != "$(id -gn gotohpsync 2>/dev/null)" ]]; then
+			usermod -aG "$node_group" gotohpsync &&
+				echo "gotohpsync is in group $node_group (so it can remove uploaded files)"
+		fi
+	fi
+
 	# Applied on every deploy, not only at bootstrap: an existing box would
 	# otherwise never pick up a new kernel or sshd setting. It is idempotent and
 	# never fails the deploy - a tuning problem must not hold back the relay.

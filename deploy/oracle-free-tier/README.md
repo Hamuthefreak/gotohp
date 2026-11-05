@@ -203,6 +203,12 @@ check instead of being skipped, so the disk is freed rather than filled with
 files the relay would otherwise never look at again. The relay itself deletes
 nothing: every removal is gotohp confirming against Google first.
 
+For that removal to work the relay user has to be able to unlink a file inside a
+directory it does not own, so it is added to the SFTP user's group (it never
+becomes the owner of anything in the node, and Watermelon keeps its manifests).
+The date pass needs the same reach for a different reason - setting an mtime is an
+ownership check - which is what the unit's single `CAP_FOWNER` is for.
+
 **One account, one pipeline.** `ACCOUNT` in the config pins a stored account;
 running several relays means several service users, which this does not do.
 

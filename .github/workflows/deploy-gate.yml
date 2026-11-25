@@ -67,13 +67,15 @@ jobs:
             deploy/oracle-free-tier/probe-tools.sh \
             deploy/oracle-free-tier/test-public.sh \
             deploy/oracle-free-tier/omnivox-mcp.sh \
+            deploy/oracle-free-tier/patch-download-guard.py \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
           # Re-fetch the vendored MCP server and re-apply the download guard, so
           # the patch survives an upstream update instead of living in an edited
           # file that the next install would erase.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n bash /tmp/ovx-gate-ship/omnivox-mcp.sh update'
+            'sudo -n env PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py \
+             bash /tmp/ovx-gate-ship/omnivox-mcp.sh update'
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \
              bash /tmp/ovx-gate-ship/omnivox-gate.sh install"

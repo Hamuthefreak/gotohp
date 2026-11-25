@@ -157,43 +157,38 @@ bash "$SELF" session >/dev/null 2>&1 || rc=$?
 
 echo 'upstream download patch'
 patch_root=$(mktemp -d)
-mkdir -p "$patch_root/src/omnivox-api/puppet"
-patched=$patch_root/src/omnivox-api/puppet/download.ts
-cat >"$patched" <<'TS'
+mkdir -p "$patch_root/src/omnivox-api/puppet" "$patch_root/src/common"
+cat >"$patch_root/src/omnivox-api/puppet/download.ts" <<'TS'
         if (redirected && contentType.startsWith('text/html')) {
             await res.body.dump();
             throw new Error('Omnivox redirected the download to a web page instead of a file. The session has probably expired, log in again with the auth app.');
         }
-        const contentDisposition = header(res.headers, 'content-disposition') || '';
-        const contentLength = Number(header(res.headers, 'content-length') ?? NaN);
-
-        return {
-            body: res.body,
-            contentType,
-            contentDisposition,
-            contentLength: Number.isInteger(contentLength) ? contentLength : undefined,
-            filename: parseFilename(contentDisposition),
-        };
 TS
-APP=$patch_root
-out=$(apply_upstream_patches 2>&1)
-patched_text=$(cat "$patched")
-has 'install applies the error-page guard' 'Omnivox answered with an error page instead of a file' "$patched_text"
-has 'html with no file name is an error page' '!sentFilename' "$patched_text"
-has 'html named like an error is an error page' '/^error/i.test(sentFilename)' "$patched_text"
-has 'the header is parsed once' 'const contentDisposition = sentDisposition;' "$patched_text"
-has 'the reply carries the parsed name' 'filename: sentFilename,' "$patched_text"
-lacks 'the redirect-only guard is gone' 'if (redirected && contentType.startsWith' "$patched_text"
-has 'the first run says it applied' 'applied' "$out"
+cat >"$patch_root/src/common/downloads.ts" <<'TS'
+    const name = path.basename(file.filename || fallbackName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    const filePath = path.join(downloadsDir, name);
+    await pipeline(file.body, fs.createWriteStream(filePath));
 
-out2=$(apply_upstream_patches 2>&1)
+    return filePath;
+TS
+out=$(python3 ./patch-download-guard.py "$patch_root" 2>&1)
+fetch_text=$(cat "$patch_root/src/omnivox-api/puppet/download.ts")
+save_text=$(cat "$patch_root/src/common/downloads.ts")
+has 'the fetch guard is applied' 'looksLikeErrorPage' "$fetch_text"
+has 'the Error.txt name is refused' '^error\.(txt|html?)' "$fetch_text"
+lacks 'the redirect-only guard is gone' 'if (redirected && contentType.startsWith' "$fetch_text"
+has 'the save guard is applied' 'Omnivox sent an HTML page instead of' "$save_text"
+has 'the written page is deleted before failing' 'fs.unlinkSync(filePath);' "$save_text"
+has 'both guards report that they applied' 'save guard: applied' "$out"
+
+out2=$(python3 ./patch-download-guard.py "$patch_root" 2>&1)
 has 'a second run is a no-op' 'already applied' "$out2"
-count=$(grep -c 'instead of a file' "$patched")
-((count == 1)) && ok 'the patch is not applied twice' || no "the patch is not applied twice (found $count)"
+count=$(grep -c 'const looksLikeErrorPage' "$patch_root/src/omnivox-api/puppet/download.ts")
+((count == 1)) && ok 'the guard is not applied twice' || no "the guard is not applied twice (found $count)"
 
-printf 'const x = 1;\n' >"$patched"
+printf 'const x = 1;\n' >"$patch_root/src/common/downloads.ts"
 rc=0
-apply_upstream_patches >/dev/null 2>&1 || rc=$?
+python3 ./patch-download-guard.py "$patch_root" >/dev/null 2>&1 || rc=$?
 ((rc != 0)) && ok 'a moved upstream anchor fails loudly' || no 'a moved upstream anchor fails loudly'
 rm -rf "$patch_root"
 

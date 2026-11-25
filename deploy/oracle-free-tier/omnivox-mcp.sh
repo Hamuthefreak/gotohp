@@ -21,6 +21,9 @@ set -Eeuo pipefail
 PREFIX=${PREFIX:-/opt/omnivox-mcp}
 APP=$PREFIX/app
 DATA=$PREFIX/data
+# Chrome lives outside the checkout on purpose: the checkout is re-fetched and
+# cleaned on every update, and a 170 MB browser download is not part of that.
+PUPPETEER_DIR=$PREFIX/.puppeteer
 SVC_USER=${SVC_USER:-omnivox}
 ENV_FILE=${ENV_FILE:-/etc/omnivox-mcp.env}
 UNIT=${UNIT:-/etc/systemd/system/omnivox-mcp.service}
@@ -80,7 +83,7 @@ PORT=$PORT
 TZ=$TZ_NAME
 OMNIVOX_DATA_DIR=$DATA
 HOME=$PREFIX
-PUPPETEER_CACHE_DIR=$APP/.puppeteer
+PUPPETEER_CACHE_DIR=$PUPPETEER_DIR
 
 # The box has under a gigabyte of RAM and also serves the phone's uploads, so
 # Chrome is not kept alive between requests. Set this to false and a
@@ -228,6 +231,9 @@ fetch_source() {
 		git clone --depth 1 --branch "$REF" "$REPO" "$APP" -q
 	fi
 	chown -R "$SVC_USER:$SVC_USER" "$APP"
+	# An older install kept its browser inside the checkout, where this clean
+	# would have removed it.
+	rm -rf "$APP/.puppeteer"
 	echo "at $(git -C "$APP" rev-parse --short HEAD)"
 }
 
@@ -236,10 +242,16 @@ npm_install() {
 	# HOME and the puppeteer cache stay inside the prefix, so the browser belongs
 	# to the service user and survives an update.
 	(cd "$APP" && runuser -u "$SVC_USER" -- env HOME="$PREFIX" \
-		PUPPETEER_CACHE_DIR="$APP/.puppeteer" \
+		PUPPETEER_CACHE_DIR="$PUPPETEER_DIR" \
 		npm install --omit=dev --no-audit --no-fund >/dev/null)
-	chown -R "$SVC_USER:$SVC_USER" "$APP/.puppeteer" 2>/dev/null || true
-	echo "chrome: $(find "$APP/.puppeteer" -name 'chrome' -type f 2>/dev/null | head -n 1)"
+	chown -R "$SVC_USER:$SVC_USER" "$PUPPETEER_DIR" 2>/dev/null || true
+	local chrome
+	chrome=$(find "$PUPPETEER_DIR" -name 'chrome' -type f 2>/dev/null | head -n 1)
+	if [[ -n $chrome ]]; then
+		echo "chrome: $chrome"
+	else
+		warn "puppeteer did not leave a chrome binary in $PUPPETEER_DIR"
+	fi
 }
 
 install_unit() {

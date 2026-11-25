@@ -41,7 +41,8 @@ echo 'environment file'
 env_text=$(render_env)
 has 'sets the port' 'PORT=3000' "$env_text"
 has 'points the server at the data folder' "OMNIVOX_DATA_DIR=$DATA" "$env_text"
-has 'keeps the puppeteer cache inside the prefix' "PUPPETEER_CACHE_DIR=$APP/.puppeteer" "$env_text"
+has 'keeps the puppeteer cache inside the prefix' "PUPPETEER_CACHE_DIR=$PREFIX/.puppeteer" "$env_text"
+lacks 'keeps the browser out of the re-fetched checkout' "PUPPETEER_CACHE_DIR=$APP" "$env_text"
 has 'asks chrome to sleep between requests' 'BROWSER_SLEEP=true' "$env_text"
 has 'disables the sandbox for this kernel' '--no-sandbox' "$env_text"
 has 'avoids the 64 MB /dev/shm' '--disable-dev-shm-usage' "$env_text"

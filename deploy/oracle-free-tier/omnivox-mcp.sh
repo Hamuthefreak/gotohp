@@ -211,6 +211,12 @@ ensure_user() {
 }
 
 fetch_source() {
+	# The checkout is owned by the service user on purpose, so git (running as
+	# root here) has to be told that is expected. Without this every command on
+	# an existing install dies with "detected dubious ownership".
+	if ! git config --global --get-all safe.directory 2>/dev/null | grep -qxF -- "$APP"; then
+		git config --global --add safe.directory "$APP"
+	fi
 	if [[ -d $APP/.git ]]; then
 		say "fetching $REF"
 		git -C "$APP" remote set-url origin "$REPO"

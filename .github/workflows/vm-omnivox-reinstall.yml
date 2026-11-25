@@ -18,6 +18,9 @@ jobs:
     name: Reinstall omnivox-mcp on the relay VM
     runs-on: ubuntu-latest
     steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
       - name: Prepare SSH
         env:
           VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}

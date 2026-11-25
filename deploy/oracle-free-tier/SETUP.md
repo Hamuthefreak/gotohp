@@ -482,3 +482,49 @@ on restart) and re-import a fresh login.
 When the session eventually expires - Omnivox cookies do not last forever, and
 with `BROWSER_SLEEP=true` nothing refreshes them - repeat the two files above.
 Nothing else needs touching, and the relay keeps running throughout.
+
+## 13. Public MCP endpoint and dashboard (optional)
+
+The MCP server above only listens on `127.0.0.1:3000`, which is why the earlier
+section hands you an SSH tunnel. If you want an MCP **URL** that works from any
+machine, this adds a small gatekeeper in front of it and publishes that:
+
+```shell
+sudo omnivox-gate install    # dashboard + cloudflared tunnel
+sudo omnivox-gate status     # units, health, public URL, setup code
+```
+
+The gate listens on `127.0.0.1:8080`; `cloudflared` dials out and gives it a
+public HTTPS name. **Nothing is opened on the instance's security list**, and the
+box stays invisible to a port scan.
+
+**First visit.** Open the URL `status` printed and choose the password for
+username `2652532`. The first-run form also asks for the setup code, which is the
+same line of `status` output; it stops working the moment the password is set, so
+nobody who finds the URL first can claim the dashboard. From then on it is just
+username and password.
+
+**What the dashboard shows:** whether the MCP server, its browser and the Omnivox
+session are healthy, whether Chrome is asleep, the photo relay timer, disk and
+memory, the public MCP URL and the bearer token. **Rotate token** invalidates
+every client at once; the dashboard stays signed in.
+
+**Connecting a client.** URL `https://<tunnel-name>/mcp`, header
+`Authorization: Bearer <token>`. Any MCP-over-HTTP client takes that directly;
+stdio-only clients go through `npx mcp-remote <url> --header "Authorization:
+Bearer <token>"`. The Omnivox access key never leaves the box: the gate injects
+it, and the client's own credential is stripped before the request goes upstream.
+
+`sudo omnivox-gate url` prints the current public URL, `uninstall` removes both
+units and keeps the password, token and tunnel log in `/opt/omnivox-mcp/gate`.
+
+**The one compromise of a quick tunnel:** its name is random and changes if the
+tunnel restarts (a reboot, a reinstall). For a name that never changes, create a
+named tunnel on a domain you control (Cloudflare dashboard -> Zero Trust ->
+Tunnels -> Create, public hostname -> `http://127.0.0.1:8080`) and run
+`cloudflared` with its token instead of the quick tunnel; the dashboard reads
+whatever name cloudflared last logged, so nothing else changes.
+
+**Tools.** `bash probe-tools.sh` on the box (or Actions -> **Probe the Omnivox
+tools**) calls every read-only tool against the live session and prints what each
+one answered. Write tools are skipped so probing never messages anyone.

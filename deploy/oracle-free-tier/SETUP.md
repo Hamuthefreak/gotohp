@@ -415,7 +415,9 @@ sudo bash /tmp/omnivox-mcp.sh install
 The installer is idempotent (`update`, `status`, `uninstall` are the other
 commands) and adds: node 22, the Chrome libraries, a 2 GB swapfile, the
 `omnivox` system user, `/opt/omnivox-mcp/{app,data}`,
-`/etc/omnivox-mcp.env` and `omnivox-mcp.service`.
+`/etc/omnivox-mcp.env` and `omnivox-mcp.service`. It is enabled at boot but stays
+stopped until a session exists, because the server exits immediately without
+`config.json` rather than waiting for one.
 
 **Why it is not configured like the project's Docker image.** This instance is
 the free shape: 2 vCPU, about 950 MB of RAM, no swap, and it is also serving the

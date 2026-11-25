@@ -499,10 +499,16 @@ public HTTPS name. **Nothing is opened on the instance's security list**, and th
 box stays invisible to a port scan.
 
 **First visit.** Open the URL `status` printed and choose the password for
-username `2652532`. The first-run form also asks for the setup code, which is the
-same line of `status` output; it stops working the moment the password is set, so
-nobody who finds the URL first can claim the dashboard. From then on it is just
-username and password.
+username `2652532`. The first-run form also asks for a setup code:
+
+```shell
+sudo omnivox-gate code    # one shot, root-only, never written to a log
+```
+
+It stops working the moment the password is set, so nobody who finds the URL
+first can claim the dashboard, and reinstalling before then mints a new one.
+From then on it is just username and password. `sudo omnivox-gate reset-setup`
+replaces a code you think has been seen.
 
 **What the dashboard shows:** whether the MCP server, its browser and the Omnivox
 session are healthy, whether Chrome is asleep, the photo relay timer, disk and

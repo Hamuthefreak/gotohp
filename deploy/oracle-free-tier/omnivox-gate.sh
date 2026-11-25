@@ -40,6 +40,8 @@ Usage: sudo omnivox-gate <command> [options]
   install                  install or refresh the dashboard and its tunnel
   status                   units, health and the public URL
   url                      print the public URL
+  code                     print the first-visit setup code
+  reset-setup              mint a new setup code (before the password is set)
   uninstall                stop and remove both units; the dashboard data stays
 
 Options (environment variables work too):
@@ -244,6 +246,9 @@ do_install() {
 	fetch_gate
 
 	say 'units'
+	# Before a password exists, reinstalling mints a fresh setup code: an old one
+	# that has been seen (in a log, on a screen) must not stay valid.
+	[[ -s $GATE_DIR/auth.json ]] || rm -f "$GATE_DIR/setup-code.txt"
 	(umask 0027 && render_env >"$ENV_FILE")
 	chown root:"$SVC_USER" "$ENV_FILE"
 	chmod 0640 "$ENV_FILE"
@@ -263,15 +268,14 @@ do_install() {
 		warn "no tunnel name yet; check: journalctl -u ovx-gate-tunnel -n 30"
 	fi
 
-	local code
-	code=$(setup_code)
-	if [[ -n $code ]]; then
+	if [[ ! -s $GATE_DIR/auth.json ]]; then
 		cat <<EOF
 
-Open ${url:-https://<the tunnel name>} and, on this first visit, choose the
-password for username $GATE_USERNAME. The setup code is:
+Open ${url:-https://<the tunnel name>} and choose the password for username
+$GATE_USERNAME. The first-visit form also asks for the setup code, which is
+never printed in a log (this one is public). Read it on the box:
 
-    $code
+    sudo omnivox-gate code
 
 It stops working as soon as the password is set. The dashboard then shows the
 MCP endpoint and its bearer token.
@@ -296,12 +300,44 @@ do_status() {
 	printf 'url:     %s\n' "${url:-not up yet}"
 	printf 'mcp:     %s\n' "${url:+$url/mcp}"
 	printf 'password: %s\n' "$([[ -s $GATE_DIR/auth.json ]] && echo 'set' || echo 'not set yet')"
-	code=$(setup_code)
-	[[ -n $code ]] && printf 'setup:   %s (first-visit code, spent once used)\n' "$code"
+	if [[ -s $GATE_DIR/auth.json ]]; then
+		printf 'setup:   closed (the password is set)\n'
+	elif [[ -s $GATE_DIR/setup-code.txt ]]; then
+		printf 'setup:   open, read the code with: sudo omnivox-gate code\n'
+	else
+		printf 'setup:   open, the code is minted on the first start\n'
+	fi
 	if command -v systemctl >/dev/null 2>&1; then
 		printf 'omnivox: %s\n' "$(systemctl is-active omnivox-mcp.service 2>/dev/null || echo inactive)"
 		printf 'relay:   %s\n' "$(systemctl is-active gotohp-sync.timer 2>/dev/null || echo inactive)"
 	fi
+}
+
+# Root-only on purpose: this is the one secret that must never reach a log.
+do_code() {
+	if [[ -s $GATE_DIR/auth.json ]]; then
+		echo 'the password is already set; there is no setup code any more' >&2
+		return 1
+	fi
+	local code
+	code=$(setup_code)
+	if [[ -z $code ]]; then
+		echo 'no code yet: start the gate once (systemctl restart ovx-gate)' >&2
+		return 1
+	fi
+	echo "$code"
+}
+
+do_reset_setup() {
+	need_root
+	if [[ -s $GATE_DIR/auth.json ]]; then
+		echo 'a password is already set; reset it by deleting' "$GATE_DIR/auth.json" >&2
+		return 1
+	fi
+	rm -f "$GATE_DIR/setup-code.txt"
+	systemctl restart ovx-gate.service
+	sleep 1
+	do_code >/dev/null && echo 'a new setup code is ready: sudo omnivox-gate code'
 }
 
 do_uninstall() {
@@ -352,6 +388,8 @@ case $CMD in
 install) do_install ;;
 status) do_status ;;
 url) public_url ;;
+code) do_code ;;
+reset-setup) do_reset_setup ;;
 uninstall) do_uninstall ;;
 '' | -h | --help) usage ;;
 *)

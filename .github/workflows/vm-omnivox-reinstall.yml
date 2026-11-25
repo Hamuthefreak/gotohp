@@ -52,3 +52,23 @@ jobs:
             < deploy/oracle-free-tier/omnivox-mcp.sh
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'sudo -n bash -lc "install -m 0755 /tmp/omnivox-mcp.sh /usr/local/bin/omnivox-mcp; /usr/local/bin/omnivox-mcp install > /tmp/ox7.log 2>&1; echo RC=\$?; grep -E \"PUPPETEER|healthy|no answer\" /tmp/ox7.log; echo HEALTH; curl -s http://127.0.0.1:3000/health; echo; echo STATE; systemctl is-active omnivox-mcp.service; systemctl is-active gotohp-sync.timer"'
+
+      - name: Ask Omnivox one real question
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          set -euo pipefail
+          opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'cat > /tmp/probe.sh' <<'PROBE'
+          k=$(cat /opt/omnivox-mcp/data/accessKey.txt)
+          curl -s --max-time 120 -X POST http://127.0.0.1:3000/tools/get-courses-summary \
+            -H "x-mcp-auth: $k" -d '{}' | head -c 900
+          PROBE
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'sudo -n bash /tmp/probe.sh; rm -f /tmp/probe.sh'

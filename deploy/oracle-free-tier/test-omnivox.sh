@@ -79,6 +79,25 @@ has 'writes only inside the prefix' "ReadWritePaths=$PREFIX" "$unit"
 has 'is enabled at boot' 'WantedBy=multi-user.target' "$unit"
 
 echo 'argument handling'
+echo 'start decision'
+# The server exits immediately when config.json is missing. A unit that starts
+# anyway turns that into a crash loop, so this branch is the one that matters.
+tmp=$(mktemp -d)
+DATA=$tmp
+if [[ $(start_decision) == wait ]]; then
+	ok 'waits for a session instead of crash-looping'
+else
+	no 'waits for a session instead of crash-looping'
+fi
+printf 'x' >"$tmp/cookies.json"
+printf 'x' >"$tmp/config.json"
+if [[ $(start_decision) == start ]]; then
+	ok 'starts once both files are present'
+else
+	no 'starts once both files are present'
+fi
+rm -rf "$tmp"
+
 rc=0
 validate_port 3000 || rc=$?
 ((rc == 0)) && ok 'accepts the default port' || no 'accepts the default port'

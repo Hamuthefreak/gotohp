@@ -251,7 +251,15 @@ install_unit() {
 	chmod 0644 "$UNIT"
 	systemctl daemon-reload
 	systemctl enable omnivox-mcp.service >/dev/null 2>&1 || true
-	systemctl restart omnivox-mcp.service
+	# The server exits immediately when config.json is missing, so starting it
+	# before a session exists only fills the journal with a restart loop.
+	if [[ $(start_decision) == start ]]; then
+		systemctl restart omnivox-mcp.service
+	else
+		systemctl stop omnivox-mcp.service >/dev/null 2>&1 || true
+		systemctl reset-failed omnivox-mcp.service >/dev/null 2>&1 || true
+		echo "not started: there is no Omnivox session in $DATA yet"
+	fi
 }
 
 wait_health() {
@@ -272,6 +280,10 @@ logged_in() {
 	[[ -s $DATA/cookies.json && -s $DATA/config.json ]]
 }
 
+start_decision() {
+	if logged_in; then echo start; else echo wait; fi
+}
+
 do_install() {
 	say "swap"
 	ensure_swap
@@ -286,11 +298,18 @@ do_install() {
 	npm_install
 	say "unit"
 	install_unit
-	wait_health || true
+	if [[ $(start_decision) == start ]]; then
+		wait_health || true
+	fi
+
+	if [[ $(start_decision) == start ]]; then
+		printf '\nomnivox-mcp is installed and running on this host.\n'
+	else
+		printf '\nomnivox-mcp is installed. It is enabled at boot but stopped: the server\n'
+		printf 'exits immediately without a session, so nothing runs until step 2.\n'
+	fi
 
 	cat <<EOF
-
-omnivox-mcp is installed and running on this host.
 
 1. It has no Omnivox session yet. On a desktop with a screen:
 

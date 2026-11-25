@@ -4,6 +4,10 @@ name: Probe the Omnivox tools
 # broken tool shows up here instead of in a client. Write tools are skipped:
 # probing must never send a message or delete anything on the account.
 #
+# The first step proves the probe can still fail: three injected failure shapes,
+# each of which must exit non-zero and name the offending tool. A green probe
+# run is only evidence if that step is green too.
+#
 # Run it from the Actions tab (Run workflow) or from another workflow.
 
 on:
@@ -19,6 +23,9 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v7
+
+      - name: Prove the probe can fail
+        run: bash deploy/oracle-free-tier/probe-tools.sh --self-test
 
       - name: Prepare SSH
         env:
@@ -50,4 +57,4 @@ jobs:
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'cat > /tmp/probe-tools.sh' \
             < deploy/oracle-free-tier/probe-tools.sh
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n bash /tmp/probe-tools.sh; echo "probe_rc=$?"'
+            'sudo -n bash /tmp/probe-tools.sh; rc=$?; echo "probe_rc=$rc"; exit $rc'

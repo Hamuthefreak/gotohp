@@ -49,6 +49,9 @@ jobs:
       - name: Test the SFTP tuning script
         run: bash deploy/oracle-free-tier/test-tuning.sh
 
+      - name: Test the omnivox installer
+        run: bash deploy/oracle-free-tier/test-omnivox.sh
+
       - name: Build gotohp-cli
         run: |
           set -euo pipefail

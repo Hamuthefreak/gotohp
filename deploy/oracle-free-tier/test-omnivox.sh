@@ -64,6 +64,25 @@ else
 	no 'rendering twice is identical'
 fi
 
+echo 'environment migration'
+# An install from before the browser moved keeps its old env file, and that file
+# points the server at a Chrome the update just deleted. Repair it, keep edits.
+tmp_env=$(mktemp)
+printf 'PORT=3000\nPUPPETEER_CACHE_DIR=%s/app/.puppeteer\nBROWSER_SLEEP=false\n' "$PREFIX" >"$tmp_env"
+ENV_FILE=$tmp_env migrate_env_paths >/dev/null
+migrated=$(cat "$tmp_env")
+has 'repairs a stale browser path' "PUPPETEER_CACHE_DIR=$PREFIX/.puppeteer" "$migrated"
+lacks 'leaves no stale path behind' "$PREFIX/app/.puppeteer" "$migrated"
+has 'keeps an edited setting' 'BROWSER_SLEEP=false' "$migrated"
+lacks 'adds no duplicate path' "$(printf 'PUPPETEER_CACHE_DIR=%s\nPUPPETEER_CACHE_DIR=' "$PREFIX/.puppeteer")" "$migrated"
+printf 'PORT=3000\n' >"$tmp_env"
+ENV_FILE=$tmp_env migrate_env_paths >/dev/null
+has 'adds the path to a file that predates it' "PUPPETEER_CACHE_DIR=$PREFIX/.puppeteer" "$(cat "$tmp_env")"
+printf 'PUPPETEER_CACHE_DIR=%s\n' "$PREFIX/.puppeteer" >"$tmp_env"
+ENV_FILE=$tmp_env migrate_env_paths >/dev/null
+has 'a correct file is left alone' "PUPPETEER_CACHE_DIR=$PREFIX/.puppeteer" "$(cat "$tmp_env")"
+rm -f "$tmp_env"
+
 echo 'systemd unit'
 unit=$(render_unit)
 has 'runs as the service user' 'User=omnivox' "$unit"

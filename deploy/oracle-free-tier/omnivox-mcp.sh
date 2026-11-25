@@ -99,6 +99,27 @@ BROWSER_LAUNCH_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usa
 EOF
 }
 
+# The browser's home moved out of the checkout (it was cleaned away on every
+# update). An existing env file is kept on purpose, so a path left over from an
+# older install has to be repaired here - otherwise the server starts, looks for
+# a Chrome that this install no longer has, and answers 503 forever.
+migrate_env_paths() {
+	[[ -f $ENV_FILE ]] || return 0
+	local current
+	current=$(sed -n 's/^PUPPETEER_CACHE_DIR=//p' "$ENV_FILE" | head -n 1)
+	if [[ -z $current ]]; then
+		printf 'PUPPETEER_CACHE_DIR=%s\n' "$PUPPETEER_DIR" >>"$ENV_FILE"
+		echo "added PUPPETEER_CACHE_DIR to $ENV_FILE"
+	elif [[ $current != "$PUPPETEER_DIR" ]]; then
+		sed -i "s|^PUPPETEER_CACHE_DIR=.*|PUPPETEER_CACHE_DIR=$PUPPETEER_DIR|" "$ENV_FILE"
+		echo "moved PUPPETEER_CACHE_DIR in $ENV_FILE: $current -> $PUPPETEER_DIR"
+	else
+		return 0
+	fi
+	chown root:"$SVC_USER" "$ENV_FILE" 2>/dev/null || warn "could not set the owner of $ENV_FILE"
+	chmod 0640 "$ENV_FILE"
+}
+
 render_unit() {
 	cat <<EOF
 # Managed by gotohp deploy/oracle-free-tier/omnivox-mcp.sh
@@ -270,6 +291,7 @@ install_unit() {
 	# a redeploy must not quietly put the defaults back over an edited file.
 	if [[ -f $ENV_FILE ]]; then
 		echo "keeping existing $ENV_FILE"
+		migrate_env_paths
 	else
 		(umask 0027 && render_env >"$ENV_FILE")
 		chown root:"$SVC_USER" "$ENV_FILE"

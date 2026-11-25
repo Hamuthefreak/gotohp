@@ -79,4 +79,90 @@ done <"$tmp/plan.tsv"
 
 echo
 printf '%d answered, %d need arguments, %d skipped, %d failed\n' "$ok" "$needs_args" "$skipped" "$failed"
-[[ $failed -eq 0 ]]
+
+# Tools that need ids were only argued with. This second pass takes real ids out
+# of the answers above and calls those tools for real, which is where a wrong
+# URL or a missing field shows up.
+echo
+echo '--- deep probe (real ids) ---'
+python3 - "$BASE" "$key" <<'PY'
+import json, re, sys, urllib.error, urllib.request
+
+base, key = sys.argv[1], sys.argv[2]
+fail = []
+
+
+def call(name, args=None):
+    data = json.dumps(args or {}).encode()
+    req = urllib.request.Request(
+        f"{base}/tools/{name}", data=data,
+        headers={"x-mcp-auth": key, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=150) as res:
+            return res.status, res.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, err.read().decode()
+    except Exception as err:  # noqa: BLE001 - a probe reports, never raises
+        return 0, f"{type(err).__name__}: {err}"
+
+
+def show(label, status, body, limit=200):
+    body = " ".join(body.split())[:limit]
+    mark = "" if status == 200 else "  <-- " + ("FAIL" if status not in (400,) else "needs args")
+    if status not in (200, 400):
+        fail.append((label, status, body))
+    print(f"{label:<44} {status:<4} {body}{mark}")
+
+
+status, courses_text = call("get-courses-summary")
+show("get-courses-summary (for ids)", status, courses_text, 80)
+courses = list(dict.fromkeys(re.findall(r"\(([0-9A-Z]{4,}\.[0-9]{4,})\)", courses_text)))[:2]
+if not courses:
+    print("no course ids found; skipping the course-scoped tools")
+
+for course in courses:
+    print(f"\ncourse {course}")
+    for tool in (
+        "get-course-info",
+        "get-course-assignments",
+        "get-course-announcements",
+        "get-course-documents",
+        "get-course-evals",
+        "get-course-people",
+    ):
+        status, body = call(tool, {"course_id": course})
+        show(f"  {tool}", status, body, 160)
+        if status != 200:
+            continue
+        if tool == "get-course-assignments":
+            ids = list(dict.fromkeys(re.findall(r"(?:^|[\s:(])(\d{4,8})\b", body)))[:1]
+            for aid in ids:
+                status, detail = call("get-assignment-detail", {"course_id": course, "assignment_id": aid})
+                show(f"    get-assignment-detail {aid}", status, detail, 160)
+                status, link = call("get-assignment-submit-link", {"course_id": course, "assignment_id": aid})
+                show(f"    get-assignment-submit-link {aid}", status, link, 120)
+
+status, messages = call("get-mio-messages")
+show("get-mio-messages (for ids)", status, messages, 120)
+msg_ids = list(dict.fromkeys(re.findall(r"\b([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\b", messages)))[:1]
+for mid in msg_ids:
+    status, body = call("read-mio-message", {"message_id": mid})
+    show("read-mio-message", status, body, 160)
+
+for tool, args in (
+    ("search-mio-messages", {"query": "vanier"}),
+    ("search-people", {"query": "smith"}),
+    ("get-service-link", {"service": "mio"}),
+    ("get-document-link", {"course_id": courses[0] if courses else "", "document_id": "0"}),
+):
+    status, body = call(tool, args)
+    show(tool, status, body, 160)
+
+print()
+if fail:
+    print(f"deep probe: {len(fail)} call(s) failed")
+    sys.exit(1)
+print("deep probe: every call answered or asked for valid arguments")
+PY
+

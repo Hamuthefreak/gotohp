@@ -256,6 +256,13 @@ do_install() {
 	systemctl daemon-reload
 	systemctl enable ovx-gate-tunnel.service >/dev/null 2>&1 || true
 	systemctl enable ovx-gate.service >/dev/null 2>&1 || true
+	# A quick tunnel is given a new public name every time it starts, so the log
+	# has to start empty: otherwise the name printed below, and the one the
+	# dashboard shows, is the dead name from the previous run.
+	systemctl stop ovx-gate-tunnel.service >/dev/null 2>&1 || true
+	if [[ -f $GATE_DIR/cloudflared.log ]]; then
+		mv -f "$GATE_DIR/cloudflared.log" "$GATE_DIR/cloudflared.log.1"
+	fi
 	systemctl restart ovx-gate-tunnel.service
 	systemctl restart ovx-gate.service
 	wait_health || true

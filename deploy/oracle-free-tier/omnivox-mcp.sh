@@ -334,6 +334,68 @@ start_decision() {
 	if logged_in; then echo start; else echo wait; fi
 }
 
+apply_upstream_patches() {
+	# Upstream answers a bad document/attachment id with 200 and an HTML error
+	# page named Error.txt, and its download path only rejects HTML after a
+	# redirect. So a wrong id used to save the error page and report success.
+	# The checkout is re-fetched on every install, so this has to be re-applied
+	# there rather than edited once by hand. The app runs through tsx, so the
+	# patched source is what actually runs.
+	local file=$APP/src/omnivox-api/puppet/download.ts
+	say "patching the download guard"
+	if [[ ! -f $file ]]; then
+		warn "upstream moved: $file is missing, the error-page guard is NOT applied"
+		return 1
+	fi
+	python3 - "$file" <<'PY'
+import pathlib, sys
+
+path = pathlib.Path(sys.argv[1])
+src = path.read_text()
+
+if 'Omnivox answered with an error page instead of a file' in src:
+    print('already applied')
+    raise SystemExit(0)
+
+anchor = """        if (redirected && contentType.startsWith('text/html')) {
+            await res.body.dump();
+            throw new Error('Omnivox redirected the download to a web page instead of a file. The session has probably expired, log in again with the auth app.');
+        }"""
+
+replacement = """        // A wrong id answers 200 with an HTML error page named Error.txt, which
+        // used to be saved as if it were the file. A real file carries its own
+        // name, so HTML with no name - or one named like an error - is a failed
+        // download, not a download.
+        const sentDisposition = header(res.headers, 'content-disposition') || '';
+        const sentFilename = parseFilename(sentDisposition);
+        if (contentType.startsWith('text/html') && (redirected || !sentFilename || /^error/i.test(sentFilename))) {
+            await res.body.dump();
+            throw new Error('Omnivox answered with an error page instead of a file. The document or attachment id is probably wrong; if every download does this, the session expired and needs a fresh login.');
+        }"""
+
+if anchor not in src:
+    print('anchor not found: upstream changed the download path, patch NOT applied', file=sys.stderr)
+    raise SystemExit(1)
+
+src = src.replace(anchor, replacement, 1)
+
+old_disposition = "        const contentDisposition = header(res.headers, 'content-disposition') || '';"
+if old_disposition not in src:
+    print('anchor not found: content-disposition read moved, patch NOT applied', file=sys.stderr)
+    raise SystemExit(1)
+src = src.replace(old_disposition, '        const contentDisposition = sentDisposition;', 1)
+
+old_filename = '            filename: parseFilename(contentDisposition),'
+if old_filename not in src:
+    print('anchor not found: filename parse moved, patch NOT applied', file=sys.stderr)
+    raise SystemExit(1)
+src = src.replace(old_filename, '            filename: sentFilename,', 1)
+
+path.write_text(src)
+print('applied')
+PY
+}
+
 do_install() {
 	say "swap"
 	ensure_swap
@@ -346,6 +408,7 @@ do_install() {
 	say "source"
 	fetch_source
 	npm_install
+	apply_upstream_patches
 	say "unit"
 	install_unit
 	if [[ $(start_decision) == start ]]; then
@@ -384,6 +447,7 @@ EOF
 do_update() {
 	fetch_source
 	npm_install
+	apply_upstream_patches
 	install_unit
 	wait_health || true
 }

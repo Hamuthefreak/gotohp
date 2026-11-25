@@ -365,6 +365,8 @@ entry in `src/schema.js`, one flag in `sync.sh`, one check in `test-sync.sh`.
 | `No space left on device` | library > boot volume | set `DELETE_AFTER_UPLOAD=true` in `/etc/gotohp-sync/config.env` and relay one month at a time |
 | `local-cleanup-failed` in `failures.log` | the upload worked, but removing the local copy did not: the relay user is not in the group that owns the node's directories | re-run **Deploy relay to VM** (it re-asserts the group on every run). The photo is already in Google Photos either way - this error is about the VM's disk, never about the library |
 | `dated 0 of N` on every run | the relay cannot set mtimes on files it does not own, so uploads would be dated by arrival | re-run the deploy; the unit ships `AmbientCapabilities=CAP_FOWNER` for exactly this |
+| `omnivox-mcp` restarts every few seconds | the box ran out of memory, so the unit's `MemoryMax` killed it | `journalctl -u omnivox-mcp -n 50`; the cap is in `/etc/omnivox-mcp.env` and the unit, see [step 12](#12-optional-omnivox-mcp-on-the-same-box) |
+| omnivox tools answer `Unauthorized` / a login error | the Omnivox session expired | log in again on a desktop, then `sudo omnivox-mcp session cookies.json config.json` |
 
 ## 10. Things that bite later
 
@@ -394,3 +396,87 @@ fronting it with Tailscale later.
 
 Everything downstream of those three is the pipeline's job. Nothing that matters
 (credentials, ledger, config) is stored in this repository.
+
+## 12. Optional: omnivox-mcp on the same box
+
+A photo relay uses almost nothing of the instance: it wakes, uploads, sleeps. The
+same free VM can also host [omnivox-mcp](https://github.com/Beat-YT/omnivox-mcp),
+a headless Chrome holding an Omnivox session so an assistant can answer questions
+about courses, grades, MIO and assignments. Installing it here costs disk (about
+700 MB with its Chrome) and nothing else, because it is capped and left asleep
+between requests.
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/Hamuthefreak/gotohp/main/deploy/oracle-free-tier/omnivox-mcp.sh \
+  -o /tmp/omnivox-mcp.sh
+sudo bash /tmp/omnivox-mcp.sh install
+```
+
+The installer is idempotent (`update`, `status`, `uninstall` are the other
+commands) and adds: node 22, the Chrome libraries, a 2 GB swapfile, the
+`omnivox` system user, `/opt/omnivox-mcp/{app,data}`,
+`/etc/omnivox-mcp.env` and `omnivox-mcp.service`.
+
+**Why it is not configured like the project's Docker image.** This instance is
+the free shape: 2 vCPU, about 950 MB of RAM, no swap, and it is also serving the
+phone's uploads. So:
+
+| Setting | Why |
+| --- | --- |
+| `BROWSER_SLEEP=true` | Chrome is ~250 MB; it exits after five idle minutes and the next request relaunches it. The tradeoff is a couple of seconds per first question, and no keep-alive refresh of the Omnivox session. Set it to `false` plus `BROWSER_REFRESH_INTERVAL=10` in `/etc/omnivox-mcp.env` to keep the browser warm instead |
+| `MemoryMax=768M`, `MemorySwapMax=1G` | a runaway Chrome gets killed inside its own unit instead of becoming the OOM killer's choice on a box whose real job is the relay |
+| 2 GB `/swapfile` | so a Chrome spike becomes a slow answer rather than a dead process somewhere else |
+| `--no-sandbox --disable-dev-shm-usage` | Ubuntu 24.04 restricts unprivileged user namespaces, and `/dev/shm` here is 64 MB |
+
+The relay is untouched by any of this: same timer, same users, same binary.
+
+### The login (the one part that needs a screen)
+
+The server never sees your password: you log in on Omnivox's real page, MFA and
+all, and hand over the two files the login app saves.
+
+1. On a desktop with a display:
+
+   ```shell
+   git clone https://github.com/Beat-YT/omnivox-mcp
+   cd omnivox-mcp/omnivox-connection
+   npm install && npm start
+   ```
+
+   Log in in the window, save **`cookies.json`** and **`config.json`** when it
+   offers them.
+2. Copy them to the box and import them:
+
+   ```shell
+   scp cookies.json config.json ubuntu@<your-ip>:/tmp/
+   ssh ubuntu@<your-ip> 'sudo omnivox-mcp session /tmp/cookies.json /tmp/config.json; rm -f /tmp/cookies*.json /tmp/config.json'
+   ```
+
+   `session` validates both files, installs them `0600` as `omnivox`, restarts
+the unit, waits for `/health`, then asks Omnivox one real question
+(`get-courses-summary`). A real answer means the session works; an auth error
+means the login needs repeating.
+
+### Reaching it
+
+Port 3000 listens on the box only, and it should stay that way: **do not add it to
+the instance's security list.** Reach it through a tunnel from the machine that
+runs your MCP client:
+
+```shell
+ssh -N -L 3000:127.0.0.1:3000 ubuntu@<your-ip>
+```
+
+Then the MCP endpoint is `http://127.0.0.1:3000/mcp?key=<access key>`, and the
+REST tools take `x-mcp-auth: <access key>`. The key is in
+`/opt/omnivox-mcp/data/accessKey.txt` (`sudo cat`) and is generated on first
+start.
+
+Treat that key like an Omnivox password: it is the whole session. The data folder
+holds the cookies and the browser profile too, which is why it is `0700` and
+`omnivox`-owned. If it ever leaks, delete `accessKey.txt` (a new one is generated
+on restart) and re-import a fresh login.
+
+When the session eventually expires - Omnivox cookies do not last forever, and
+with `BROWSER_SLEEP=true` nothing refreshes them - repeat the two files above.
+Nothing else needs touching, and the relay keeps running throughout.

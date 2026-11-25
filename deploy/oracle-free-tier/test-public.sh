@@ -73,6 +73,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$url/mcp" \
 
 code=$(curl -s -o "$TMP/tools" -w '%{http_code}' --max-time 60 -X POST "$url/mcp" \
 	-H "authorization: Bearer $token" -H 'content-type: application/json' \
+	-H 'accept: application/json, text/event-stream' \
 	-d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 if [[ $code == 200 ]] && grep -q '"tools"' "$TMP/tools"; then
 	ok '/mcp lists tools for the bearer token'

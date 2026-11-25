@@ -1,0 +1,53 @@
+name: Probe the Omnivox tools
+
+# Calls every read-only tool on the real session and prints the answers, so a
+# broken tool shows up here instead of in a client. Write tools are skipped:
+# probing must never send a message or delete anything on the account.
+#
+# Run it from the Actions tab (Run workflow) or from another workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Call the read-only tools
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Prepare SSH
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VM_SSH_KEY:-}" ]; then
+            echo "::error::repository secret VM_SSH_KEY is missing"
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VM_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          : > "$HOME/.ssh/known_hosts"
+
+      - name: Probe
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          set -euo pipefail
+          opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'cat > /tmp/probe-tools.sh' \
+            < deploy/oracle-free-tier/probe-tools.sh
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n bash /tmp/probe-tools.sh; echo "probe_rc=$?"'

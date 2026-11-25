@@ -1,0 +1,71 @@
+name: Deploy the public gate
+
+# Ships the dashboard, its bearer-token proxy and the Cloudflare tunnel to the
+# relay box whenever the gate changes. Safe to re-run: the installer is
+# idempotent and keeps the password and the token.
+#
+# The setup code is deliberately not printed here: this log is public, and that
+# code claims the dashboard. Read it on the box with `sudo omnivox-gate status`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/oracle-free-tier/gate.mjs"
+      - "deploy/oracle-free-tier/omnivox-gate.sh"
+      - ".github/workflows/deploy-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-gate
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Install the gate on the relay VM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Prepare SSH
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VM_SSH_KEY:-}" ]; then
+            echo "::error::repository secret VM_SSH_KEY is missing"
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$VM_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          : > "$HOME/.ssh/known_hosts"
+
+      - name: Ship and install
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          set -euo pipefail
+          opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+          )
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'install -d -m 755 /tmp/ovx-gate-ship'
+          scp -q "${opts[@]}" \
+            deploy/oracle-free-tier/gate.mjs \
+            deploy/oracle-free-tier/omnivox-gate.sh \
+            deploy/oracle-free-tier/probe-tools.sh \
+            "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \
+             bash /tmp/ovx-gate-ship/omnivox-gate.sh install"
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n bash /tmp/ovx-gate-ship/omnivox-gate.sh status'

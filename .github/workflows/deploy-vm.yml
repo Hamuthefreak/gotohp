@@ -52,6 +52,9 @@ jobs:
       - name: Test the omnivox installer
         run: bash deploy/oracle-free-tier/test-omnivox.sh
 
+      - name: Test the public gate
+        run: bash deploy/oracle-free-tier/test-gate.sh
+
       - name: Build gotohp-cli
         run: |
           set -euo pipefail

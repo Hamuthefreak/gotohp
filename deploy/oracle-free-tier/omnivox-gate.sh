@@ -41,6 +41,7 @@ Usage: sudo omnivox-gate <command> [options]
   status                   units, health and the public URL
   url                      print the public URL
   code                     print the first-visit setup code
+  token                    print the MCP bearer token (creates it if missing)
   reset-setup              mint a new setup code (before the password is set)
   uninstall                stop and remove both units; the dashboard data stays
 
@@ -335,8 +336,20 @@ do_code() {
 	echo "$code"
 }
 
-do_reset_setup() {
+# Root-only, for a shell that needs to call the MCP endpoint itself (the public
+# smoke test does) without going through the dashboard.
+do_token() {
 	need_root
+	local file=$GATE_DIR/token.txt
+	if [[ ! -s $file ]] || (($(wc -c <"$file") < 32)); then
+		(umask 0077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$file")
+		chown "$SVC_USER:$SVC_USER" "$file"
+		chmod 0600 "$file"
+	fi
+	cat "$file"
+}
+
+do_reset_setup() {	need_root
 	if [[ -s $GATE_DIR/auth.json ]]; then
 		echo 'a password is already set; reset it by deleting' "$GATE_DIR/auth.json" >&2
 		return 1
@@ -396,6 +409,7 @@ install) do_install ;;
 status) do_status ;;
 url) public_url ;;
 code) do_code ;;
+token) do_token ;;
 reset-setup) do_reset_setup ;;
 uninstall) do_uninstall ;;
 '' | -h | --help) usage ;;

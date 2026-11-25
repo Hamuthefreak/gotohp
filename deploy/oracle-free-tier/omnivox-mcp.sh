@@ -211,6 +211,7 @@ ensure_user() {
 	install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$PREFIX"
 	# The session, the access key and the browser profile all live in here.
 	install -d -m 0700 -o "$SVC_USER" -g "$SVC_USER" "$DATA"
+	install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$PUPPETEER_DIR"
 }
 
 fetch_source() {
@@ -244,13 +245,22 @@ npm_install() {
 	(cd "$APP" && runuser -u "$SVC_USER" -- env HOME="$PREFIX" \
 		PUPPETEER_CACHE_DIR="$PUPPETEER_DIR" \
 		npm install --omit=dev --no-audit --no-fund >/dev/null)
+
+	# npm only runs puppeteer's postinstall when the tree actually changed, so a
+	# re-install can leave node_modules without a browser. Ask for it explicitly;
+	# puppeteer keeps an existing copy and downloads only what is missing.
+	if [[ -x $APP/node_modules/.bin/puppeteer ]]; then
+		(cd "$APP" && runuser -u "$SVC_USER" -- env HOME="$PREFIX" \
+			PUPPETEER_CACHE_DIR="$PUPPETEER_DIR" \
+			./node_modules/.bin/puppeteer browsers install chrome >/dev/null)
+	fi
 	chown -R "$SVC_USER:$SVC_USER" "$PUPPETEER_DIR" 2>/dev/null || true
-	local chrome
-	chrome=$(find "$PUPPETEER_DIR" -name 'chrome' -type f 2>/dev/null | head -n 1)
+	local chrome=""
+	chrome=$(find "$PUPPETEER_DIR" -name 'chrome' -type f 2>/dev/null | head -n 1 || true)
 	if [[ -n $chrome ]]; then
 		echo "chrome: $chrome"
 	else
-		warn "puppeteer did not leave a chrome binary in $PUPPETEER_DIR"
+		warn "no chrome binary in $PUPPETEER_DIR - the server cannot answer without one"
 	fi
 }
 

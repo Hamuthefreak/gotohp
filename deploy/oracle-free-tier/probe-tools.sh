@@ -12,8 +12,184 @@
 #
 # Write tools are only ever called with ids that cannot exist, so nothing is
 # sent, moved or deleted on the account.
+#
+#   sudo bash probe-tools.sh --self-test
+#
+# proves the checks bite: it runs this same script against a fake account whose
+# server is broken on purpose three ways - a 200 that is an error page, a
+# non-2xx, and a call that gets no answer - and fails unless each one exits
+# non-zero naming the offending tool. A green probe means nothing otherwise.
 
 set -uo pipefail
+
+if [[ ${1:-} == --self-test ]]; then
+	python3 - "$0" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+script = str(Path(sys.argv[1]).resolve())
+
+TOOLS = [
+    'get-courses-summary', 'get-terms', 'get-mio-messages', 'get-mio-folders',
+    'get-course-info', 'get-course-assignments', 'get-course-announcements',
+    'get-course-documents', 'get-course-evals', 'get-course-people',
+    'get-assignment-detail', 'get-assignment-submit-link', 'get-assignment-file-link',
+    'get-document-link', 'read-mio-message', 'get-mio-attachment-link',
+    'search-mio-messages', 'search-people', 'get-service-link',
+    'send-mio-message', 'reply-mio-message', 'delete-mio-message',
+    'move-mio-message', 'restore-mio-message', 'flag-mio-message',
+    'create-mio-folder',
+]
+WRITE = {
+    'send-mio-message', 'reply-mio-message', 'delete-mio-message',
+    'move-mio-message', 'restore-mio-message', 'flag-mio-message',
+    'create-mio-folder',
+}
+MSG_ID = '11111111-1111-1111-1111-111111111111'
+ATT_ID = '22222222-2222-2222-2222-222222222222'
+BOGUS_UUID = '00000000-0000-0000-0000-000000000000'
+
+state = {'mode': 'none', 'downloads': Path('.')}
+
+
+class Fake(BaseHTTPRequestHandler):
+    """A minimal MCP server that can be told to misbehave."""
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, status, body):
+        data = body.encode()
+        self.send_response(status)
+        self.send_header('content-type', 'text/plain; charset=utf-8')
+        self.send_header('content-length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path != '/tools':
+            self.reply(404, 'no such route')
+            return
+        self.reply(200, json.dumps({
+            'tools': [{'name': n, 'inputSchema': {}} for n in TOOLS],
+        }))
+
+    def do_POST(self):
+        name = self.path.rsplit('/', 1)[-1]
+        try:
+            raw = self.rfile.read(int(self.headers.get('content-length') or 0))
+            args = json.loads(raw or b'{}')
+        except ValueError:
+            args = {}
+        mode = state['mode']
+        downloads = state['downloads']
+
+        # The three failure shapes a real server has produced or could produce.
+        if mode == 'errorpage' and name == 'get-course-info':
+            self.reply(200, f'File saved to: {downloads}/Error.txt')
+            return
+        if mode == 'http500' and name == 'get-terms':
+            self.reply(500, 'internal error')
+            return
+        if mode == 'silent' and name == 'search-people':
+            # Promise a body, send a fragment, hang up: no usable answer.
+            self.send_response(200)
+            self.send_header('content-length', '500')
+            self.end_headers()
+            self.wfile.write(b'partial')
+            self.close_connection = True
+            return
+
+        if name in WRITE:
+            self.reply(400, 'no such message or folder')
+            return
+        if name == 'get-document-link':
+            if args.get('document_id') == 'DOC1':
+                out = downloads / 'lab-notes.pdf'
+                out.write_bytes(b'%PDF-1.4 fake document\n')
+                self.reply(200, f'File saved to: {out}')
+            else:
+                self.reply(400, f'document {args.get("document_id")} not found')
+            return
+        if name == 'get-assignment-file-link':
+            ok = args.get('file_id') == 'F1'
+            self.reply(200 if ok else 400, 'link ok' if ok else 'file not found')
+            return
+        if name == 'get-mio-attachment-link':
+            ok = args.get('attachment_id') != BOGUS_UUID
+            self.reply(200 if ok else 400, 'link ok' if ok else 'attachment not found')
+            return
+
+        bodies = {
+            'get-courses-summary': 'Your courses\n- Introduction (ENG1.1234)\n',
+            'get-terms': 'Fall 2026',
+            'get-mio-messages': f'inbox\n- {MSG_ID} hello\n',
+            'get-mio-folders': 'INBOX\nSent',
+            'get-course-assignments': '- ID: ASG1\n',
+            'get-course-documents': '- ID: DOC1\n',
+            'get-assignment-submit-link': 'File ID: F1 (role: teacher_document)\n',
+            'read-mio-message': f'from: someone\nattachment_id: {ATT_ID}\nbody: hi\n',
+            'search-mio-messages': 'no matches',
+            'search-people': 'no matches',
+            'get-service-link': 'https://example.test/mio',
+        }
+        self.reply(200, bodies.get(name, f'{name} ok'))
+
+
+server = HTTPServer(('127.0.0.1', 0), Fake)
+server_url = f'http://127.0.0.1:{server.server_address[1]}'
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
+def run(mode):
+    downloads = Path(tempfile.mkdtemp(prefix='probe-selftest-'))
+    keyfile = downloads.parent / (downloads.name + '.key')
+    keyfile.write_text('self-test-key')
+    state['mode'] = mode
+    state['downloads'] = downloads
+    env = dict(os.environ, BASE=server_url, KEY_FILE=str(keyfile), DOWNLOADS=str(downloads))
+    proc = subprocess.run(['bash', script], env=env, capture_output=True, text=True, timeout=600)
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+bad = 0
+rc, out = run('none')
+if rc == 0:
+    print('self-test  baseline, fake account, no fault       exit 0  ok')
+else:
+    bad += 1
+    print(f'self-test  baseline, fake account, no fault       exit {rc}  FAIL'
+          ' (the harness does not pass, so the injections prove nothing)')
+    print('\n'.join('    ' + line for line in out.strip().splitlines()[-12:]))
+
+for mode, tool, shape in (
+    ('errorpage', 'get-course-info', 'error page served as a 200'),
+    ('http500', 'get-terms', 'non-2xx answer'),
+    ('silent', 'search-people', 'tool left unanswered'),
+):
+    rc, out = run(mode)
+    named = [line for line in out.splitlines() if tool in line and 'FAIL' in line]
+    if rc != 0 and named:
+        print(f'self-test  {shape:<33} exit {rc}  names {tool}  ok')
+        print(f'           probe said: {named[0].strip()}')
+    else:
+        bad += 1
+        why = 'exited 0' if rc == 0 else f'never named {tool}'
+        print(f'self-test  {shape:<33} FAIL: {why}')
+
+if bad:
+    print(f'\nself-test: {bad} injected failure shape(s) went unreported')
+    raise SystemExit(1)
+print('\nself-test: the probe fails, naming the tool, for every injected failure shape')
+PY
+	exit
+fi
 
 BASE=${BASE:-http://127.0.0.1:3000}
 KEY_FILE=${KEY_FILE:-/opt/omnivox-mcp/data/accessKey.txt}

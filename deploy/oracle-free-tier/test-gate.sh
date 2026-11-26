@@ -48,17 +48,83 @@ trap cleanup EXIT
 
 cat >"$tmp/upstream.mjs" <<'JS'
 import http from 'node:http';
+// A stand-in for omnivox-mcp: health, the tool list, the per-tool call route,
+// and an echo for the MCP proxy checks. It warms up (browser/page/omnivox true,
+// sleeping false) the first time a tool is called, which is exactly what the
+// real server does when Chrome wakes.
+const state = { warmed: false };
+const tools = [
+	{ name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
+	{ name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
+	{
+		name: 'read-mio-message',
+		description: 'One MIO message',
+		inputSchema: { type: 'object', properties: { message_id: { type: 'string' } }, required: ['message_id'] },
+	},
+	{
+		name: 'send-mio-message',
+		description: 'Send a message',
+		inputSchema: { type: 'object', properties: { to: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'body'] },
+	},
+	{
+		name: 'get-document-link',
+		description: 'Save a course document',
+		inputSchema: { type: 'object', properties: { document_id: { type: 'string' } }, required: ['document_id'] },
+	},
+];
+const KEY = 'the-omnivox-access-key';
 http
 	.createServer((req, res) => {
 		let body = '';
 		req.on('data', (c) => (body += c));
 		req.on('end', () => {
+			const url = new URL(req.url, 'http://127.0.0.1');
+			const key = req.headers['x-mcp-auth'] || '';
+			if (url.pathname === '/health') {
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
+				return;
+			}
+			if (req.method === 'GET' && url.pathname === '/tools') {
+				if (key !== KEY) {
+					res.writeHead(401, { 'content-type': 'application/json' });
+					res.end('{"error":"no key"}');
+					return;
+				}
+				res.writeHead(200, { 'content-type': 'application/json' });
+				res.end(JSON.stringify({ tools }));
+				return;
+			}
+			if (req.method === 'POST' && url.pathname.startsWith('/tools/')) {
+				if (key !== KEY) {
+					res.writeHead(401, { 'content-type': 'application/json' });
+					res.end('{"error":"no key"}');
+					return;
+				}
+				state.warmed = true;
+				const name = url.pathname.split('/').pop();
+				let args = {};
+				try {
+					args = JSON.parse(body || '{}');
+				} catch {
+					args = {};
+				}
+				res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+				// The failure shape the real server has produced: Omnivox's error
+				// page saved as a file, answered with a 200.
+				if (name === 'get-document-link' && args.document_id === 'ERR1') {
+					res.end('File saved to: /tmp/Error.txt');
+					return;
+				}
+				res.end('# ' + name + ' answered with ' + (args.message_id || 'no arguments'));
+				return;
+			}
 			res.writeHead(200, { 'content-type': 'application/json' });
 			res.end(
 				JSON.stringify({
 					path: req.url,
 					method: req.method,
-					key: req.headers['x-mcp-auth'] || '',
+					key,
 					authorization: req.headers.authorization || '',
 					cookie: req.headers.cookie || '',
 					body,
@@ -143,9 +209,11 @@ body=$(curl -s -X POST "$base/mcp" -H "Authorization: Bearer $tok" -d '{"jsonrpc
 contains 'the proxy reaches the MCP server' '"path":"/mcp"' "$body"
 contains 'the proxy injects the Omnivox key' '"key":"the-omnivox-access-key"' "$body"
 if grep -q "$tok" <<<"$body"; then no 'the client token is forwarded upstream'; else ok 'the client token never reaches the MCP server'; fi
-contains 'the tools route is proxied' '"path":"/tools"' \
+# /tools now really serves the tool list (the fake upstream answers it, as the
+# MCP server does), so proxying it means the list arrives through the gate.
+contains 'the tools route is proxied' 'get-courses-summary' \
 	"$(curl -s "$base/tools" -H "Authorization: Bearer $tok")"
-contains 'a ?key= query still works' '"path":"/tools"' \
+contains 'a ?key= query still works' 'get-courses-summary' \
 	"$(curl -s "$base/tools?key=$tok")"
 check 'a wrong ?key= is refused' 401 "$(curl -s -o /dev/null -w '%{http_code}' "$base/tools?key=wrong")"
 
@@ -220,6 +288,41 @@ if [[ -n $copy_id ]] && grep -q "id=\"$copy_id\"" <<<"$doc"; then
 else
 	no "the Copy button targets a field on the page (#${copy_id:-none})"
 fi
+
+echo 'the tool runner'
+# The page carries a runner: a tool list, prefilled required arguments, a run
+# button, and switches the page repaints itself after a call. A tool call is the
+# only thing that wakes Chrome, so the switches have to follow it without a
+# reload or they would keep lying for the rest of the visit.
+contains 'the dashboard carries the tool runner' 'id="tool-runner"' "$doc"
+contains 'the runner lists the registered tools' 'get-courses-summary' "$doc"
+contains 'the runner marks the write tools' 'data-write="true"' "$doc"
+contains 'the runner names the required arguments' 'Required: message_id' "$doc"
+contains 'the runner can wake the session in one click' 'id="wake-session"' "$doc"
+contains 'the switches say which value they show' 'data-cap="omnivox"' "$doc"
+contains 'the CSP lets the page call itself' "connect-src 'self'" "$csp"
+contains 'the runner posts to its own endpoint' "fetch('/api/tool'" "$js"
+contains 'the runner reads the status back' "fetch('/api/summary'" "$js"
+contains 'the runner prefills the required fields' 'option.dataset.example' "$js"
+contains 'the runner asks before a write tool' 'window.confirm' "$js"
+check 'the tool endpoint needs a login' 401 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/tool" -H 'content-type: application/json' -d '{"name":"get-terms","args":{}}')"
+check 'the tool endpoint refuses a cross-origin post' 403 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar4" -X POST "$base/api/tool" -H 'Origin: https://evil.example' -H 'content-type: application/json' -d '{"name":"get-terms","args":{}}')"
+check 'a tool the server does not register is refused' 404 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar4" -X POST "$base/api/tool" -H 'content-type: application/json' -d '{"name":"not-a-tool"}')"
+check 'a name that is not a tool name is refused' 400 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar4" -X POST "$base/api/tool" -H 'content-type: application/json' -d '{"name":"../etc/passwd"}')"
+answer=$(curl -s -b "$tmp/jar4" -X POST "$base/api/tool" -H 'content-type: application/json' -d '{"name":"read-mio-message","args":{"message_id":"abc-123"}}')
+contains 'a tool call is answered through the dashboard' '# read-mio-message answered with abc-123' "$answer"
+contains 'the answer comes back as a clean result' '"ok":true' "$answer"
+if grep -q 'the-omnivox-access-key' <<<"$answer"; then no 'the tool answer leaks the Omnivox key'; else ok 'the tool answer never shows the Omnivox key'; fi
+contains 'the session turns to yes after the call' '"omnivox":true' "$(curl -s -b "$tmp/jar4" "$base/api/summary")"
+
+# A 200 that is really an error page must not read as a success: the probe
+# taught the gate the same lesson, and the page shows the honest answer.
+contains 'a saved error page is not a success' 'saved an error page' \
+	"$(curl -s -b "$tmp/jar4" -X POST "$base/api/tool" -H 'content-type: application/json' -d '{"name":"get-document-link","args":{"document_id":"ERR1"}}')"
 
 echo 'dashboard session'
 # A session must not wear out: twelve page views in a row on one cookie jar, each

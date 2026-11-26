@@ -28,13 +28,16 @@ const CLOUDFLARED_LOG = process.env.CLOUDFLARED_LOG || path.join(DATA_DIR, 'clou
 const HTTPS = process.env.GATE_HTTPS === '1';
 const SESSION_TTL = 12 * 60 * 60 * 1000;
 const BODY_LIMIT = 32 * 1024;
+// A tool answer can be long (a document list, a whole calendar); enough to read,
+// bounded so one call cannot fill a browser tab or the proxy's memory.
+const MAX_RESULT = 40 * 1024;
 
 // Every switch lives under /api, so nothing else can be mistaken for one.
 const API = '/api/';
 
 // The dashboard carries no inline style or script any more, so this needs no
 // 'unsafe-inline'; the MCP proxy answers with whatever upstream sends.
-const CSP = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const CSP = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 const FILES = {
 	auth: path.join(DATA_DIR, 'auth.json'),
@@ -359,6 +362,43 @@ function upstreamHealth() {
 	});
 }
 
+// One request to the MCP server as the gatekeeper: the Omnivox key goes in,
+// nothing of the client's does. Answers with the status and the text, never a
+// parsed shape, because tools answer prose as often as JSON.
+function upstreamRequest(pathname, { method = 'GET', body = '', timeout = 90000 } = {}) {
+	const key = omnivoxKey();
+	const url = new URL(pathname, UPSTREAM);
+	const started = Date.now();
+	return new Promise((resolve) => {
+		const headers = key ? { 'x-mcp-auth': key } : {};
+		if (body) {
+			headers['content-type'] = 'application/json';
+			headers['content-length'] = Buffer.byteLength(body);
+		}
+		const req = http.request(
+			{
+				hostname: url.hostname,
+				port: url.port,
+				path: url.pathname + url.search,
+				method,
+				timeout,
+				headers,
+			},
+			(res) => {
+				const chunks = [];
+				res.on('data', (c) => chunks.push(c));
+				res.on('end', () =>
+					resolve({ status: res.statusCode || 0, text: Buffer.concat(chunks).toString('utf8'), ms: Date.now() - started }),
+				);
+			},
+		);
+		req.on('timeout', () => req.destroy(new Error(`no answer in ${Math.round(timeout / 1000)} seconds`)));
+		req.on('error', (error) => resolve({ status: 0, text: '', ms: Date.now() - started, error: error.message }));
+		if (body) req.write(body);
+		req.end();
+	});
+}
+
 // The latest URL cloudflared announced, or '' when it has not yet.
 function tunnelUrl() {
 	if (PUBLIC_URL) return PUBLIC_URL;
@@ -430,6 +470,67 @@ function bearerOk(req, url) {
 	return sameSecret(typeof given === 'string' ? given : '', state_.token);
 }
 
+// ---------------------------------------------------------------- the tool list
+
+// Tools that change the account. The dashboard labels them and asks before it
+// runs one; the token already allows them, so this is a warning, not a wall.
+const WRITE_TOOL = /(send|reply|delete|move|restore|flag|mark|create)/;
+const TOOLS_TTL = 60 * 1000;
+let toolsCache = { at: 0, tools: [], error: '' };
+
+function sampleValue(name, spec = {}) {
+	if (spec.default !== undefined) return spec.default;
+	if (Array.isArray(spec.enum) && spec.enum.length) return spec.enum[0];
+	const type = Array.isArray(spec.type) ? spec.type[0] : spec.type;
+	if (type === 'number' || type === 'integer') return 0;
+	if (type === 'boolean') return false;
+	if (type === 'array') return [];
+	if (type === 'object') return {};
+	return `<${name}>`;
+}
+
+// What the page needs per tool: whether it writes, an argument skeleton with
+// only the required fields (so a click is a valid call), and a hint naming them.
+function describeTool(tool) {
+	const schema = tool.inputSchema || {};
+	const properties = schema.properties || {};
+	const required = Array.isArray(schema.required) ? schema.required : [];
+	const example = {};
+	for (const name of required) example[name] = sampleValue(name, properties[name]);
+	const name = String(tool.name || '');
+	const description = String(tool.description || '').replace(/\s+/g, ' ').trim();
+	return {
+		name,
+		write: WRITE_TOOL.test(name),
+		example,
+		hint: required.length ? `Required: ${required.join(', ')}. Replace the <placeholders> with real ids.` : 'No arguments needed.',
+		description: description.length > 68 ? `${description.slice(0, 67)}…` : description,
+	};
+}
+
+// Cached briefly: the list only changes when the server restarts, and a failure
+// is never cached so one bad moment does not empty the page for a minute.
+async function upstreamTools() {
+	if (toolsCache.tools.length && Date.now() - toolsCache.at < TOOLS_TTL) return toolsCache;
+	const answer = await upstreamRequest('/tools', { timeout: 5000 });
+	if (answer.status !== 200) {
+		return { at: 0, tools: [], error: `the MCP server did not list its tools (${answer.status || answer.error})` };
+	}
+	let body = null;
+	try {
+		body = JSON.parse(answer.text);
+	} catch {
+		return { at: 0, tools: [], error: 'the MCP server sent something that is not the tool list' };
+	}
+	const tools = (Array.isArray(body?.tools) ? body.tools : []).map(describeTool).filter((tool) => tool.name);
+	toolsCache = { at: Date.now(), tools, error: '' };
+	return toolsCache;
+}
+
+function esc(value) {
+	return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+}
+
 // ---------------------------------------------------------------- pages
 
 const STYLE = `
@@ -452,7 +553,9 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.12em;color:var(--mute
 code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 pre{background:#0a0e13;border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;font-size:12.5px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0a0e13;color:var(--ink);font:inherit}
+input,select,textarea{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0a0e13;color:var(--ink);font:inherit}
+textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;resize:vertical}
+pre.result{margin:14px 0 0;max-height:440px;white-space:pre-wrap;word-break:break-word}
 label{display:block;font-size:12.5px;color:var(--muted);margin:12px 0 6px}
 button{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#18202b;color:var(--ink);font:inherit;cursor:pointer}
 button.primary{background:var(--accent);color:#062015;border-color:transparent;font-weight:650}
@@ -494,6 +597,151 @@ for (const form of document.querySelectorAll('form[data-confirm]')) {
   form.addEventListener('submit', (event) => {
     if (!window.confirm(form.dataset.confirm)) event.preventDefault();
   });
+}
+
+// ---------------------------------------------------------------- live status
+const note = document.getElementById('health-note');
+
+function paintChips(upstream) {
+  const answered = upstream && upstream.status === 200;
+  const caps = (upstream && upstream.body) || {};
+  const word = (value) => (!answered ? 'unknown' : value === true ? 'yes' : value === false ? 'no' : 'unknown');
+  const tone = (value) => (!answered ? '' : value === true ? 'ok' : value === false ? 'bad' : '');
+  const sleeping = caps.sleeping === true;
+  const values = {
+    ok: [word(caps.ok), tone(caps.ok)],
+    browser: [word(caps.browser), tone(caps.browser)],
+    page: [word(caps.page), tone(caps.page)],
+    omnivox: [word(caps.omnivox), tone(caps.omnivox)],
+    chrome: !answered ? ['unknown', ''] : sleeping ? ['asleep', 'warn'] : ['awake', 'ok'],
+  };
+  for (const key of Object.keys(values)) {
+    for (const node of document.querySelectorAll('[data-cap="' + key + '"]')) {
+      node.textContent = values[key][0];
+      node.className = values[key][1];
+    }
+  }
+  if (!note) return;
+  if (!answered) {
+    note.textContent = 'The MCP server did not answer the health check (HTTP ' + ((upstream && upstream.status) || 'no answer') + ').';
+  } else if (sleeping) {
+    note.textContent = 'Health answered 200; Chrome is asleep, so the next request wakes it in about 20 seconds.';
+  } else {
+    note.textContent = 'Health answered 200; Chrome is awake and the Omnivox session is ready.';
+  }
+}
+
+async function refreshStatus() {
+  try {
+    const response = await fetch('/api/summary', { headers: { accept: 'application/json' } });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    paintChips(data.upstream);
+  } catch (error) {
+    if (note) note.textContent = 'The dashboard could not read its own status (' + error.message + ').';
+  }
+}
+
+// ---------------------------------------------------------------- the runner
+const runner = document.getElementById('tool-runner');
+if (runner) {
+  const select = document.getElementById('tool-select');
+  const args = document.getElementById('tool-args');
+  const hint = document.getElementById('tool-hint');
+  const meta = document.getElementById('tool-meta');
+  const result = document.getElementById('tool-result');
+  const runButton = document.getElementById('tool-run');
+  const chosen = () => select.options[select.selectedIndex];
+
+  function paintArgs() {
+    const option = chosen();
+    if (!option) return;
+    let example = '{}';
+    try {
+      example = JSON.stringify(JSON.parse(option.dataset.example || '{}'), null, 2);
+    } catch {
+      example = '{}';
+    }
+    args.value = example;
+    hint.textContent = option.dataset.hint || '';
+  }
+
+  async function run(name, payload) {
+    meta.textContent = 'Running ' + name + '... Chrome may take about 20 seconds to wake.';
+    result.hidden = false;
+    result.textContent = '';
+    runButton.disabled = true;
+    try {
+      const response = await fetch('/api/tool', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name, args: payload }),
+      });
+      const data = await response.json().catch(() => ({ error: 'HTTP ' + response.status }));
+      if (data.ok) {
+        meta.textContent = name + ' answered ' + data.status + ' in ' + data.ms + ' ms' + (data.truncated ? ' (shortened)' : '') + '.';
+      } else {
+        meta.textContent = name + ' did not answer cleanly: ' + (data.error || 'HTTP ' + (data.status || response.status));
+      }
+      result.textContent = data.text || '(no output)';
+    } catch (error) {
+      meta.textContent = 'The dashboard could not reach its own server: ' + error.message;
+    }
+    runButton.disabled = false;
+    await refreshStatus();
+  }
+
+  select.addEventListener('change', paintArgs);
+  paintArgs();
+
+  runner.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const option = chosen();
+    if (!option) return;
+    if (option.dataset.write === 'true' && !window.confirm(option.value + ' changes your Omnivox account. Run it?')) return;
+    let payload;
+    try {
+      payload = JSON.parse(args.value.trim() || '{}');
+    } catch (error) {
+      meta.textContent = 'Those arguments are not JSON: ' + error.message;
+      return;
+    }
+    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      meta.textContent = 'Arguments have to be a JSON object, like {"course_id": "..."}';
+      return;
+    }
+    run(option.value, payload);
+  });
+
+  const wake = document.getElementById('wake-session');
+  if (wake) {
+    wake.addEventListener('click', () => {
+      const options = Array.from(select.options);
+      const light =
+        options.find((option) => option.value === 'get-terms') ||
+        options.find((option) => option.dataset.write !== 'true' && option.dataset.example === '{}');
+      if (!light) {
+        meta.textContent = 'There is no argument-free read tool to wake the session with.';
+        return;
+      }
+      select.value = light.value;
+      paintArgs();
+      run(light.value, {});
+    });
+  }
+
+  const check = document.getElementById('check-status');
+  if (check) {
+    check.addEventListener('click', async () => {
+      meta.textContent = 'Asking the MCP server how it is doing...';
+      await refreshStatus();
+      const omnivox = document.querySelector('[data-cap="omnivox"]');
+      meta.textContent =
+        omnivox && omnivox.textContent === 'yes'
+          ? 'The Omnivox session is awake.'
+          : 'The Omnivox session is still asleep; run a tool or wake it.';
+    });
+  }
 }
 `;
 
@@ -551,10 +799,63 @@ function setupPage(error = '') {
 	);
 }
 
+// What the switches read right after a health answer. The page repaints them
+// from /api/summary after every tool call, so the same wording lives in SCRIPT.
+function healthNote(upstream) {
+	if (upstream.status !== 200) {
+		return `The MCP server did not answer the health check (HTTP ${upstream.status || 'no answer'}).`;
+	}
+	return upstream.body?.sleeping === true
+		? 'Health answered 200; Chrome is asleep, so the next request wakes it in about 20 seconds.'
+		: 'Health answered 200; Chrome is awake and the Omnivox session is ready.';
+}
+
+// The runner: every registered tool, with the required arguments prefilled so a
+// click is a real call. Write tools are grouped apart and confirmed in the page.
+function runnerCard(tools) {
+	if (!tools.tools.length) {
+		return `<h2>Run a tool</h2>
+    <div class="card"><p class="muted small lead">${esc(tools.error || 'The MCP server listed no tools.')} Reload the page to ask it again.</p></div>`;
+	}
+	const option = (tool) =>
+		`<option value="${esc(tool.name)}" data-example="${esc(JSON.stringify(tool.example))}" data-hint="${esc(tool.hint)}" data-write="${tool.write}">${esc(tool.name)}${
+			tool.description ? ` — ${esc(tool.description)}` : ''
+		}</option>`;
+	const reads = tools.tools.filter((tool) => !tool.write);
+	const writes = tools.tools.filter((tool) => tool.write);
+	const groups = [
+		reads.length ? `<optgroup label="Read (${reads.length})">${reads.map(option).join('')}</optgroup>` : '',
+		writes.length ? `<optgroup label="Write (${writes.length}) — changes your account">${writes.map(option).join('')}</optgroup>` : '',
+	].join('');
+	return `<h2>Run a tool</h2>
+    <div class="card">
+      <p class="muted small lead">Calls the MCP server with the same access your clients get, against your real Omnivox account.
+      The first call after Chrome sleeps takes about 20 seconds, and the switches above follow what it answers.</p>
+      <form id="tool-runner">
+        <label for="tool-select">Tool</label>
+        <select id="tool-select">${groups}</select>
+        <p class="muted small" id="tool-hint"></p>
+        <label for="tool-args">Arguments (JSON)</label>
+        <textarea id="tool-args" rows="4" spellcheck="false"></textarea>
+        <div class="row top">
+          <button class="primary" type="submit" id="tool-run">Run</button>
+          <button type="button" id="wake-session">Wake session</button>
+          <button type="button" id="check-status">Check status</button>
+          <span class="muted small" id="tool-meta">Ready.</span>
+        </div>
+      </form>
+      <pre id="tool-result" class="result" hidden></pre>
+    </div>`;
+}
+
 function dashboardPage(summary) {
 	const caps = summary.upstream.body || {};
-	const chip = (label, value) =>
-		`<span class="chip">${label} <b class="${value === true ? 'ok' : value === false ? 'bad' : ''}">${value === true ? 'yes' : value === false ? 'no' : String(value)}</b></span>`;
+	const answered = summary.upstream.status === 200;
+	const chip = (label, key, text, tone) =>
+		`<span class="chip">${label} <b data-cap="${key}" class="${tone}">${text}</b></span>`;
+	const word = (value) => (!answered ? 'unknown' : value === true ? 'yes' : value === false ? 'no' : 'unknown');
+	const tone = (value) => (!answered ? '' : value === true ? 'ok' : value === false ? 'bad' : '');
+	const sleeping = caps.sleeping === true;
 	const gb = (bytes) => `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 	return layout(
 		'Omnivox',
@@ -563,17 +864,17 @@ function dashboardPage(summary) {
 
     <h2>Service</h2>
     <div class="card">
-      <div class="row">${chip('MCP server', caps.ok === true)}${chip('Browser', caps.browser === true)}${chip('Page', caps.page === true)}${chip('Omnivox session', caps.omnivox === true)}${chip('Chrome', caps.sleeping === true ? 'asleep' : 'awake')}</div>
+      <div class="row">${chip('MCP server', 'ok', word(caps.ok), tone(caps.ok))}${chip('Browser', 'browser', word(caps.browser), tone(caps.browser))}${chip('Page', 'page', word(caps.page), tone(caps.page))}${chip('Omnivox session', 'omnivox', word(caps.omnivox), tone(caps.omnivox))}${chip('Chrome', 'chrome', answered ? (sleeping ? 'asleep' : 'awake') : 'unknown', !answered ? '' : sleeping ? 'warn' : 'ok')}</div>
       <div class="grid spaced">
         <div><div class="kv">mcp unit</div><div class="val ${summary.units.mcp === 'active' ? 'ok' : 'bad'}">${summary.units.mcp}</div></div>
         <div><div class="kv">photo relay</div><div class="val ${summary.units.relay === 'active' ? 'ok' : 'bad'}">${summary.units.relay}</div></div>
         <div><div class="kv">disk free</div><div class="val">${summary.disk ? gb(summary.disk.free) : 'n/a'}</div></div>
         <div><div class="kv">memory free</div><div class="val">${summary.memory ? `${Math.round(summary.memory.available / 1024 / 1024)} MB` : 'n/a'}</div></div>
       </div>
-      <p class="muted small note">Health answered ${
-				summary.upstream.status === 200 ? '200' : `HTTP ${summary.upstream.status}`
-			}; Chrome asleep means the next request wakes it in about 20 seconds.</p>
+      <p class="muted small note" id="health-note">${healthNote(summary.upstream)}</p>
     </div>
+
+    ${runnerCard(summary.tools)}
 
     <h2>MCP endpoint</h2>
     <div class="card">
@@ -689,6 +990,7 @@ async function handle(req, res) {
 			token,
 			tokenSlice: `${token.slice(0, 6)}…`,
 			upstream: await upstreamHealth(),
+			tools: await upstreamTools(),
 			units: { mcp: await systemdUnit('omnivox-mcp.service'), relay: await systemdUnit('gotohp-sync.timer') },
 			disk: diskFree(),
 			memory: memory(),
@@ -719,6 +1021,44 @@ async function handle(req, res) {
 			disk: diskFree(),
 			memory: memory(),
 			uptime: Math.round(process.uptime()),
+		});
+	}
+
+	if (url.pathname === '/api/tool') {
+		if (!session) return send(res, 401, { error: 'sign in first' });
+		if (method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+		if (!sameOrigin(req)) return send(res, 403, { error: 'cross-origin request refused' });
+		const body = await readForm(req);
+		const name = String(body.name || '');
+		// The name is the path segment upstream, so it never carries anything else.
+		if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return send(res, 400, { error: 'that is not a tool name' });
+		const listed = await upstreamTools();
+		if (listed.error) return send(res, 502, { error: listed.error });
+		if (!listed.tools.some((tool) => tool.name === name)) return send(res, 404, { error: `no such tool: ${name}` });
+		const given = body.args;
+		const args = given && typeof given === 'object' && !Array.isArray(given) ? given : {};
+		const answer = await upstreamRequest(`/tools/${name}`, { method: 'POST', body: JSON.stringify(args) });
+		if (!answer.status) return send(res, 504, { error: answer.error || 'the MCP server did not answer' });
+		// A 200 that is really a failure: the server saved Omnivox's error page
+		// instead of a file. The probe treats that as a failure too.
+		const pageError = /File saved to: \S*Error\.(txt|html)/i.test(answer.text);
+		const good = answer.status >= 200 && answer.status < 300 && !pageError;
+		const text =
+			answer.text.length > MAX_RESULT
+				? `${answer.text.slice(0, MAX_RESULT)}\n… shortened: the whole answer was ${answer.text.length} characters`
+				: answer.text;
+		return send(res, 200, {
+			ok: good,
+			name,
+			status: answer.status,
+			ms: answer.ms,
+			text,
+			truncated: text.length !== answer.text.length,
+			error: pageError
+				? 'the server saved an error page instead of a real answer'
+				: good
+					? ''
+					: `the tool answered HTTP ${answer.status}`,
 		});
 	}
 

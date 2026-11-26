@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Loads a throwaway gatekeeper in real headless Chrome and checks what only a
 // browser can show: the stylesheet is applied, the CSP the gate sends is obeyed,
-// Copy reaches the clipboard and says so, and Rotate issues a new token that
-// works while the old one stops.
+// Copy reaches the clipboard and says so, Rotate issues a new token that works
+// while the old one stops, and the tool runner calls a tool and repaints the
+// service switches from the answer without a reload.
 //
 //   node test-gate-browser.mjs [path/to/gate.mjs]
 //
@@ -122,12 +123,44 @@ const keyFile = path.join(tmp, 'key.txt');
 fs.mkdirSync(dataDir, { recursive: true });
 fs.writeFileSync(keyFile, 'the-omnivox-access-key');
 
-// A stand-in for omnivox-mcp: it only answers what the dashboard asks.
+// A stand-in for omnivox-mcp: health, the tool list, and the per-tool call
+// route. It starts with Chrome asleep and the Omnivox session cold, and warms
+// on the first tool call - which is what the real server does, and what makes
+// the switches in the page change.
 const fakeUpstream = `
 import http from 'node:http';
+const state = { warmed: false };
+const tools = [
+  { name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
+  { name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
+  { name: 'read-mio-message', description: 'One MIO message', inputSchema: { type: 'object', properties: { message_id: { type: 'string' } }, required: ['message_id'] } },
+  { name: 'send-mio-message', description: 'Send a message', inputSchema: { type: 'object', properties: { to: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'body'] } },
+];
 http.createServer((req, res) => {
-  res.writeHead(200, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, browser: true, page: true, omnivox: true, sleeping: true }));
+  let raw = '';
+  req.on('data', (c) => (raw += c));
+  req.on('end', () => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/tools') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ tools }));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname.startsWith('/tools/')) {
+      state.warmed = true;
+      const name = url.pathname.split('/').pop();
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('# ' + name + ' answered with ' + (name === 'get-courses-summary' ? 'six courses\\n## Sustainable well-being/fitness (109102MQ.00019)' : 'no arguments'));
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('no such route');
+  });
 }).listen(Number(process.argv[2]), '127.0.0.1');
 `;
 fs.writeFileSync(path.join(tmp, 'upstream.mjs'), fakeUpstream);
@@ -313,6 +346,58 @@ try {
 	const ruleCount = await page.evaluate(() => document.styleSheets[0].cssRules.length);
 	if (ruleCount > 20) ok(`the page after rotating is styled too (${ruleCount} rules)`);
 	else no(`the page after rotating is styled too (only ${ruleCount} rules)`);
+
+	// The runner: the list, the prefilled arguments, a real call, and the
+	// switches that have to follow it without a reload. This is the path the
+	// owner uses to wake Chrome, so it is checked the way they use it.
+	console.log('the tool runner');
+	const toolCount = await page.$$eval('#tool-select option', (options) => options.length);
+	if (toolCount >= 4) ok(`the tool list is on the page (${toolCount} tools)`);
+	else no(`the tool list is on the page (${toolCount} options)`);
+	const writeFlag = await page.$eval('#tool-select option[value="send-mio-message"]', (option) => option.dataset.write);
+	check('a write tool is marked as one', 'true', writeFlag);
+	await page.select('#tool-select', 'read-mio-message');
+	const prefilled = await page.$eval('#tool-args', (el) => el.value);
+	if (/"message_id"/.test(prefilled) && /<message_id>/.test(prefilled)) ok('the required arguments are prefilled');
+	else no(`the required arguments are prefilled (got ${prefilled.replace(/\s+/g, ' ')})`);
+	const toolHint = await page.$eval('#tool-hint', (el) => el.textContent);
+	if (/Required: message_id/.test(toolHint)) ok('the page names the required arguments');
+	else no(`the page names the required arguments (got "${toolHint}")`);
+
+	const chips = () =>
+		page.$$eval('[data-cap]', (nodes) => Object.fromEntries(nodes.map((node) => [node.dataset.cap, node.textContent.trim()])));
+	const before = await chips();
+	check('the session starts cold in the fake server', 'no', before.omnivox);
+	check('and Chrome starts asleep', 'asleep', before.chrome);
+
+	await page.select('#tool-select', 'get-courses-summary');
+	await page.click('#tool-run');
+	await page.waitForFunction(
+		() => {
+			const out = document.getElementById('tool-result');
+			return out && !out.hidden && /six courses/.test(out.textContent);
+		},
+		{ timeout: 25000 },
+	);
+	ok('running a tool shows its real answer in the page');
+	await page.waitForFunction(() => document.querySelector('[data-cap="omnivox"]').textContent.trim() === 'yes', { timeout: 15000 });
+	const after = await chips();
+	check('the Omnivox session turns to yes after the call', 'yes', after.omnivox);
+	check('Browser turns to yes as well', 'yes', after.browser);
+	check('Chrome reads awake', 'awake', after.chrome);
+	const noteText = await page.$eval('#health-note', (el) => el.textContent);
+	if (/awake/.test(noteText)) ok('the note under the switches says awake');
+	else no(`the note under the switches says awake (got "${noteText}")`);
+
+	await page.evaluate(() => {
+		document.getElementById('tool-result').textContent = '';
+	});
+	await page.click('#wake-session');
+	await page.waitForFunction(() => /get-terms answered/.test(document.getElementById('tool-result').textContent), { timeout: 20000 });
+	ok('Wake session runs a real call with no arguments');
+	await page.click('#check-status');
+	await page.waitForFunction(() => /awake/.test(document.getElementById('tool-meta').textContent), { timeout: 10000 });
+	ok('Check status reports the session awake');
 
 	// A policy that blocked the page would show up either as a violation or as
 	// an element behaving unlike its own stylesheet. Both fail here.

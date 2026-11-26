@@ -516,6 +516,15 @@ session are healthy, whether Chrome is asleep, the photo relay timer, disk and
 memory, the public MCP URL and the bearer token. **Rotate token** invalidates
 every client at once; the dashboard stays signed in.
 
+**Running a tool from the dashboard.** The *Run a tool* card lists every tool
+the server registers, prefills the arguments it requires, and calls it with the
+gate's own key, so it is the same real call a client makes. Write tools are
+grouped apart and ask before they run. **Wake session** runs the lightest read
+tool (`get-terms`), which is what brings Chrome and the Omnivox session up; the
+switches at the top repaint from the health answer as soon as a call returns, so
+a cold session reads `no` until the first call and `yes` after it, with no
+reload. **Check status** just asks again, without running anything.
+
 **Connecting a client.** URL `https://<tunnel-name>/mcp`, header
 `Authorization: Bearer <token>`. Any MCP-over-HTTP client takes that directly;
 stdio-only clients go through `npx mcp-remote <url> --header "Authorization:

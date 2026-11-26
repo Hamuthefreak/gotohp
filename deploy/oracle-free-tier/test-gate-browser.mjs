@@ -153,6 +153,14 @@ http.createServer((req, res) => {
       res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
       return;
     }
+    // Chrome's jar refuses a cookie for this origin, so the suite sends the
+    // session header itself. A one-shot fetch() from the page still has to carry
+    // it: without it /frozen answers 401 and the switch never flips.
+    if (url.pathname === '/frozen' && !/ovx_session=/.test(req.headers.cookie || '')) {
+      res.writeHead(401);
+      res.end('signed out');
+      return;
+    }
     if (url.pathname === '/frozen') {
       state.stale = true;
       state.sticky = true;
@@ -303,20 +311,27 @@ try {
 	page.on('requestfailed', (request) => problems.push(`requestfailed: ${request.url()}`));
 
 	// The page has to start signed in, so the suite signs the session itself with
-	// the throwaway gate's own key, exactly as gate.mjs does, and hands that to
-	// the browser. It is set through request interception because the dashboard
-	// is a web app manifest away from a secure context: with no public suffix, a
-	// cookie for the gate origin can count as third-party and is refused.
+	// the throwaway gate's own key, exactly as gate.mjs does, and sends it with
+	// every request to the gate. A cookie is not an option: Chrome's jar refuses
+	// one for this bare http origin (it reads it as third-party without a public
+	// suffix), and the jar in CI held nothing at all. A one-shot fetch() from the
+	// page obeys interception too, unlike page.setExtraHTTPHeaders.
+	const seen = [];
 	await page.setRequestInterception(true);
-	page.on('request', (request) => {
-		if (!request.url().startsWith(`${base}/`)) {
-			request.continue();
-			return;
+	page.on('request', async (request) => {
+		try {
+			if (!request.url().startsWith(`${base}/`) || request.isInterceptResolutionHandled?.()) {
+				await request.continue();
+				return;
+			}
+			const headers = { ...request.headers() };
+			const jar = headers.cookie ? `${headers.cookie}; ` : '';
+			headers.cookie = `${jar}${sessionCookie.name}=${sessionCookie.value}`;
+			seen.push(new URL(request.url()).pathname);
+			await request.continue({ headers });
+		} catch (error) {
+			problems.push(`interception: ${error.message}`);
 		}
-		const headers = { ...request.headers() };
-		const jar = headers.cookie ? `${headers.cookie}; ` : '';
-		headers.cookie = `${jar}${sessionCookie.name}=${sessionCookie.value}`;
-		request.continue({ headers });
 	});
 	// Whether Chrome's jar holds it is not the question: the page has to read as
 	// signed in. That is checked by the dashboard itself below - the stale-session

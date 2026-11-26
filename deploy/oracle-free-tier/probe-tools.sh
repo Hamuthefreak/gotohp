@@ -106,8 +106,16 @@ class Fake(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        if name == 'get-assignment-submit-link':
+            # Mirror a real file-mode deployment: no MCP_SERVER_URL, no link.
+            self.reply(500, "get-assignment-submit-link requires HTTP mode with "
+                           "MCP_SERVER_URL set to the server's public base URL")
+            return
         if name in WRITE:
             self.reply(400, 'no such message or folder')
+            return
+        if mode == 'ghostfile' and name == 'get-document-link' and args.get('document_id') == 'DOC1':
+            self.reply(200, f'File saved to: {downloads}/ghost.pdf')
             return
         if name == 'get-document-link':
             if args.get('document_id') == 'DOC1':
@@ -168,19 +176,21 @@ else:
           ' (the harness does not pass, so the injections prove nothing)')
     print('\n'.join('    ' + line for line in out.strip().splitlines()[-12:]))
 
-for mode, tool, shape in (
-    ('errorpage', 'get-course-info', 'error page served as a 200'),
-    ('http500', 'get-terms', 'non-2xx answer'),
-    ('silent', 'search-people', 'tool left unanswered'),
+for mode, tool, shape, needle in (
+    ('errorpage', 'get-course-info', 'error page served as a 200', 'Error.txt'),
+    ('http500', 'get-terms', 'non-2xx answer', '500'),
+    ('silent', 'search-people', 'tool left unanswered', 'no answer'),
+    ('ghostfile', 'get-document-link', 'saved path that does not exist', 'missing, empty or stale'),
 ):
     rc, out = run(mode)
-    named = [line for line in out.splitlines() if tool in line and 'FAIL' in line]
+    # Each scenario must fail for its own reason, not some other breakage.
+    named = [line for line in out.splitlines() if tool in line and 'FAIL' in line and needle in line]
     if rc != 0 and named:
         print(f'self-test  {shape:<33} exit {rc}  names {tool}  ok')
         print(f'           probe said: {named[0].strip()}')
     else:
         bad += 1
-        why = 'exited 0' if rc == 0 else f'never named {tool}'
+        why = 'exited 0' if rc == 0 else f'never named {tool} as {needle!r}'
         print(f'self-test  {shape:<33} FAIL: {why}')
 
 if bad:
@@ -341,8 +351,18 @@ print()
 for course, aid in assignments[:3]:
     status, body, _ = call('get-assignment-detail', {'course_id': course, 'assignment_id': aid})
     report(f'get-assignment-detail {aid}', status, body, limit=110)
+    # This deployment serves files and runs without MCP_SERVER_URL, so the tool
+    # is documented to refuse and say why. Assert that exact refusal: a silent
+    # success would mean link mode turned on, which changes every download.
     status, body, _ = call('get-assignment-submit-link', {'course_id': course, 'assignment_id': aid})
-    report(f'get-assignment-submit-link {aid}', status, body, limit=110)
+    called.add('get-assignment-submit-link')
+    if status != 200 and 'MCP_SERVER_URL' in body:
+        rejected += 1
+        print(f'{"get-assignment-submit-link " + aid:<46} {status:<4} says it needs MCP_SERVER_URL  ok (documented refusal)')
+    else:
+        failures.append(('get-assignment-submit-link', status, body[:300]))
+        print(f'{"get-assignment-submit-link " + aid:<46} {status:<4} {" ".join(body.split())[:110]}  <-- FAIL (unexpected answer)')
+        continue
     if assignments:
         files = re.findall(r'File ID: (\S+) \(role: (\w+)\)', body)
         for file_id, role in files[:1]:
@@ -360,21 +380,29 @@ if assignments:
 
 # ---------------------------------------------------------------- documents
 print()
-before = {p.name for p in downloads.glob('*')} if downloads.is_dir() else set()
 if documents:
     course, doc = documents[0]
+    started = time.time()
     status, body, _ = call('get-document-link', {'course_id': course, 'document_id': doc})
-    report(f'get-document-link {doc}', status, body, limit=120)
-    if is_error_page(body) or status != 200:
-        failures.append(('get-document-link valid', status, body[:300]))
-
-    after = {p.name for p in downloads.glob('*')} if downloads.is_dir() else set()
-    new = [n for n in sorted(after - before) if not re.match(r'Error\.', n, re.I)]
-    if new:
-        print(f'{"":<46} {"":<4} saved {" ".join(new)}')
-    else:
-        failures.append(('get-document-link wrote nothing', 0, ''))
-        print(f'{"":<46} {"":<4} <-- FAIL (no file saved for a valid id)')
+    if report(f'get-document-link {doc}', status, body, limit=120):
+        # Judge the file the tool says it wrote, not the downloads listing: a
+        # file left by an earlier run is still proof this call worked.
+        match = re.search(r'File saved to: (\S+)', body)
+        if not match:
+            failures.append(('get-document-link reported no path', status, body[:300]))
+            print(f'{"get-document-link " + doc:<46} {status:<4} <-- FAIL (no saved path in the answer)')
+        else:
+            saved = Path(match.group(1))
+            try:
+                st = saved.stat()
+            except OSError:
+                st = None
+            fresh = st is not None and st.st_size > 0 and st.st_mtime >= started - 2
+            if fresh and not re.match(r'Error\.', saved.name, re.I):
+                print(f'{"":<46} {"":<4} wrote {saved} ({st.st_size} bytes)')
+            else:
+                failures.append(('get-document-link saved nothing usable', status, str(saved)))
+                print(f'{"get-document-link " + doc:<46} {status:<4} <-- FAIL (reported {saved}, which is missing, empty or stale)')
 
 for course, _ in documents[:1]:
     status, body, _ = call('get-document-link', {'course_id': course, 'document_id': BOGUS})

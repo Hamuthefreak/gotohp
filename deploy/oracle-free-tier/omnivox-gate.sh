@@ -30,6 +30,7 @@ RAW="https://raw.githubusercontent.com/Hamuthefreak/gotohp/$REF/deploy/oracle-fr
 GATE_USERNAME=${GATE_USERNAME:-2652532}
 CLOUDFLARED=${CLOUDFLARED:-/usr/local/bin/cloudflared}
 COMMAND=${COMMAND:-/usr/local/bin/omnivox-gate}
+NEW_CODE=${NEW_CODE:-0}
 
 say() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -49,6 +50,8 @@ Usage: sudo omnivox-gate <command> [options]
 Options (environment variables work too):
   --port N        local port the dashboard listens on (default 8080)
   --ref NAME      git branch, tag or commit to fetch gate.mjs from (default main)
+  --new-code      mint a fresh setup code while installing (a plain install
+                  keeps the one already on disk)
   -h, --help      this text
 
 The MCP server itself is installed and logged in by `omnivox-mcp`. This script
@@ -255,6 +258,20 @@ setup_code() {
 	cat "$GATE_DIR/setup-code.txt" 2>/dev/null || true
 }
 
+# The setup code belongs to the owner, not to the deploy: a reinstall keeps the
+# one already on disk, so a code somebody was handed still works afterwards.
+# Only an explicit rotation - install --new-code, or reset-setup - replaces it.
+# Once a password exists the code is spent and is removed either way.
+prepare_setup_code() {
+	if [[ -s $GATE_DIR/auth.json ]]; then
+		rm -f "$GATE_DIR/setup-code.txt"
+		return 0
+	fi
+	[[ ${NEW_CODE:-0} == 1 ]] || return 0
+	rm -f "$GATE_DIR/setup-code.txt"
+	echo 'rotating the setup code (--new-code)'
+}
+
 do_install() {
 	need_root
 	ensure_node
@@ -264,9 +281,7 @@ do_install() {
 	install_command || warn "$COMMAND is not installed; call this script by path"
 
 	say 'units'
-	# Before a password exists, reinstalling mints a fresh setup code: an old one
-	# that has been seen (in a log, on a screen) must not stay valid.
-	[[ -s $GATE_DIR/auth.json ]] || rm -f "$GATE_DIR/setup-code.txt"
+	prepare_setup_code
 	(umask 0027 && render_env >"$ENV_FILE")
 	chown root:"$SVC_USER" "$ENV_FILE"
 	chmod 0640 "$ENV_FILE"
@@ -405,6 +420,10 @@ while [[ $# -gt 0 ]]; do
 		}
 		REF=$2
 		shift 2
+		;;
+	--new-code)
+		NEW_CODE=1
+		shift
 		;;
 	-h | --help)
 		usage

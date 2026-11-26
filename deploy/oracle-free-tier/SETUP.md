@@ -506,9 +506,10 @@ sudo omnivox-gate code    # one shot, root-only, never written to a log
 ```
 
 It stops working the moment the password is set, so nobody who finds the URL
-first can claim the dashboard, and reinstalling before then mints a new one.
-From then on it is just username and password. `sudo omnivox-gate reset-setup`
-replaces a code you think has been seen.
+first can claim the dashboard. Reinstalling keeps the code that is already
+on disk, so a deploy cannot invalidate one you are holding; run
+`sudo omnivox-gate install --new-code` (or `reset-setup`) when you actually
+want a fresh one. From then on it is just username and password.
 
 **What the dashboard shows:** whether the MCP server, its browser and the Omnivox
 session are healthy, whether Chrome is asleep, the photo relay timer, disk and

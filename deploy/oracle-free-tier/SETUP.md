@@ -483,6 +483,27 @@ When the session eventually expires - Omnivox cookies do not last forever, and
 with `BROWSER_SLEEP=true` nothing refreshes them - repeat the two files above.
 Nothing else needs touching, and the relay keeps running throughout.
 
+## Tools this deployment adds on top of upstream
+
+The upstream server registers 38 tools. `patch-extra-tools.py` adds three read
+tools it has no tool for, and is re-applied on every install/update (the
+checkout is re-fetched each time, so an edit by hand would vanish):
+
+| Tool | What it returns |
+|---|---|
+| `get-college-document-link` | the file of a college document (registrar letters, course-drop and midterm notices); `document_id` comes from `get-college-documents` |
+| `get-mio-message-link` | one attachment of a MIO message; both ids come from `read-mio-message`. A pair that does not belong together is refused with the message's own attachment list, instead of Omnivox's bare "404 instead of sending the file" |
+| `get-campus-events` | the college's events list with dates and places |
+
+Files are saved to `/opt/omnivox-mcp/data/downloads` (with no `MCP_SERVER_URL`
+link mode is off, so the tools save instead of linking). Nothing in the patch
+sends, moves, deletes or creates anything on the account.
+
+`scripts/toolscheck.ts` imports every tool module without starting the server. A
+module that throws while it loads takes the whole server down at startup - that
+is how `delete-mio-message` once disappeared - so the installer runs this check
+after every update and names the broken file before the unit is restarted.
+
 ## 13. Public MCP endpoint and dashboard (optional)
 
 The MCP server above only listens on `127.0.0.1:3000`, which is why the earlier

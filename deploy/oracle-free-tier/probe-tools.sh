@@ -50,6 +50,7 @@ TOOLS = [
     'get-cancelled-classes', 'get-college-documents', 'get-college-list',
     'get-college-news', 'get-grades-summary', 'get-online-forms',
     'get-overview', 'get-schedule', 'get-teachers',
+    'get-college-document-link', 'get-mio-message-link', 'get-campus-events',
 ]
 WRITE = {
     'send-mio-message', 'reply-mio-message', 'delete-mio-message',
@@ -110,6 +111,31 @@ class Fake(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        # A message that really has an attachment, so the new tools run the way
+        # they do on the account.
+        if name == 'read-mio-message':
+            self.reply(200, f'from: someone\nAttachments:\n- poster.pdf (application/pdf, 1 KB) [attachment_id: {ATT_ID}]\nbody: hi')
+            return
+        if name == 'get-mio-message-link' and args.get('attachment_id') != ATT_ID:
+            self.reply(400, f'Message {args.get("message_id")} has no attachment {args.get("attachment_id")}. It lists: poster.pdf ({ATT_ID}).')
+            return
+        if name == 'get-mio-message-link':
+            self.reply(200, 'link ok')
+            return
+        if name == 'get-college-documents':
+            self.reply(200, '# College documents (1)\n\n## Registrar guide\n- File: PDF, 46 KB\n- ID: 33333333-3333-4333-8333-333333333333')
+            return
+        if name == 'get-college-document-link' and args.get('document_id') == '33333333-3333-4333-8333-333333333333':
+            out = downloads / 'registrar-guide.pdf'
+            out.write_bytes(b'%PDF-1.4 registrar\n')
+            self.reply(200, f'File saved to: {out}')
+            return
+        if name == 'get-college-document-link':
+            self.reply(400, f'No college document with id {args.get("document_id")}. Call get-college-documents for the current list.')
+            return
+        if name == 'get-campus-events':
+            self.reply(200, '# Campus events (1)\n\n## Open house\n- When: Sat, Nov 28 10:00\n')
+            return
         # The three failure shapes a real server has produced or could produce.
         if mode == 'errorpage' and name == 'get-course-info':
             self.reply(200, f'File saved to: {downloads}/Error.txt')
@@ -186,6 +212,9 @@ class Fake(BaseHTTPRequestHandler):
             'search-mio-messages': 'no matches',
             'search-people': 'no matches',
             'get-service-link': 'https://example.test/mio',
+            'get-college-document-link': 'college documents',
+            'get-mio-message-link': 'attachments',
+            'get-campus-events': 'events',
         }
         self.reply(200, bodies.get(name, f'{name} ok'))
 
@@ -569,6 +598,54 @@ for name in (
 ):
     status, body, _ = call(name, {})
     report(f'  {name} (no term_id)', status, body, limit=70)
+
+# ---------------------------------------------------------------- new read tools
+# The three tools this deployment adds on top of upstream. Each is called with a
+# real id from the account; the file one has to leave a real file on disk, like
+# get-document-link has to.
+print()
+college_json_status, college_json, _ = call('get-college-documents', {})
+first_college = None
+if college_json_status == 200:
+    ids = re.findall(r'- ID: ([0-9a-fA-F-]{36})', college_json)
+    first_college = ids[0] if ids else None
+if first_college:
+    started = time.time()
+    status, body, _ = call('get-college-document-link', {'document_id': first_college})
+    if report('get-college-document-link', status, body, limit=120):
+        match = re.search(r'File saved to: (\S+)', body)
+        saved = Path(match.group(1)) if match else None
+        try:
+            st = saved.stat() if saved else None
+        except OSError:
+            st = None
+        if st is not None and st.st_size > 0 and st.st_mtime >= started - 2:
+            print(f'{"":<46} {"":<4} wrote {saved} ({st.st_size} bytes)')
+        else:
+            failures.append(('get-college-document-link saved nothing usable', status, str(saved)))
+            print(f'{"":<46} {"":<4} <-- FAIL (reported {saved}, which is missing, empty or stale)')
+    status, body, _ = call('get-college-document-link', {'document_id': '00000000-0000-0000-0000-000000000000'})
+    report('get-college-document-link (bogus)', status, body, expect_error=True, limit=120)
+else:
+    failures.append(('get-college-documents gave no document id', college_json_status, ''))
+    print(f'{"get-college-document-link":<46} {"":<4} <-- FAIL (no document id to try)')
+
+if attachment:
+    mid, att = attachment
+    status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': att})
+    report('get-mio-message-link', status, body, limit=120)
+    status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': BOGUS_UUID})
+    report('get-mio-message-link (bogus)', status, body, expect_error=True, limit=120)
+    # The refusal has to be the message's own answer, not Omnivox's bare 404.
+    text = ' '.join(body.split())
+    if 'has no attachment' in text:
+        rejected += 0
+    else:
+        failures.append(('get-mio-message-link (bogus) not checked locally', status, text[:300]))
+        print(f'{"  it names the attachments that exist":<46} {"":<4} <-- FAIL (a bogus id reached Omnivox)')
+
+status, body, _ = call('get-campus-events', {})
+report('get-campus-events', status, body, limit=110)
 
 # ---------------------------------------------------------------- coverage
 print()

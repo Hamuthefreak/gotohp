@@ -297,6 +297,48 @@ python3 ./patch-mio-guard.py "$mio_root" >/dev/null 2>&1 || rc=$?
 ((rc != 0)) && ok 'a moved upstream anchor fails loudly' || no 'a moved upstream anchor fails loudly'
 rm -rf "$mio_root"
 
+echo 'upstream extra read tools'
+# Three read tools upstream has no tool for, a guard on MIO attachment ids, and a
+# pre-flight that refuses a build whose tool modules do not all load. A module
+# that throws on load exits the whole server (seen with delete-mio-message), and
+# a fork would be wiped by the next fetch_source - so this is a re-applied patch.
+ex_root=$(mktemp -d)
+mkdir -p "$ex_root/src/omnivox-api/requests" "$ex_root/src/express/routes" "$ex_root/src/mcp/tools/courses"
+printf 'import { omnivox } from "../puppet";\n\nexport function GetListeActualite(count: number = 21) {\n    return omnivox.postJson<any>("/Mobl/College/ListeActualite", { NombreItem: count });\n}\n' >"$ex_root/src/omnivox-api/requests/College.ts"
+printf 'export function GetMioAttachment(messageId: string, attachmentId: string): Promise<DownloadResult> {\n    return fetchDownload(\`/Mobl/Mio/GetMioAttachment?\${messageId}\`, {});\n}\n' >"$ex_root/src/omnivox-api/requests/Mio.ts"
+printf 'import * as express from "express";\nconst router = express.Router();\nrouter.get("/tools", (a, b) => b.json({}));\nexport default router;\n' >"$ex_root/src/express/routes/tools.ts"
+printf 'const tool = 1;\n' >"$ex_root/src/mcp/tools/courses/documents.ts"
+out=$(python3 ./patch-extra-tools.py "$ex_root" 2>&1)
+has 'the college document tool is added' 'get-college-document-link' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
+has 'it reads the document list the app already fetches' 'ListeDocumentsMessages?.ListeDocuments' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
+has 'it saves the file the document points at' 'PathFichier' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
+has 'the MIO attachment tool is added' 'get-mio-message-link' "$(cat "$ex_root/src/mcp/tools/extra/mio-message-link.ts" 2>/dev/null)"
+has 'it checks the pair before asking Omnivox' 'ResolveMioAttachment' "$(cat "$ex_root/src/mcp/tools/extra/mio-message-link.ts" 2>/dev/null)"
+has 'the campus events tool is added' 'get-campus-events' "$(cat "$ex_root/src/mcp/tools/extra/campus-events.ts" 2>/dev/null)"
+has 'the events list request is added' 'export function GetListeEvenement' "$(cat "$ex_root/src/omnivox-api/requests/College.ts")"
+has 'a wrong attachment id names the ones that exist' 'has no attachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
+has 'the attachment itself is still fetched as before' 'export function GetMioAttachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
+has 'the pre-flight script is added' 'registered > 0' "$(cat "$ex_root/scripts/toolscheck.ts" 2>/dev/null)"
+has 'it says what it applied' 'attachment guard: applied' "$out"
+# The guard must not add a second declaration of the function it anchors on.
+att=$(grep -c 'export function GetMioAttachment' "$ex_root/src/omnivox-api/requests/Mio.ts")
+((att == 1)) && ok 'the attachment function is declared once' || no "the attachment function is declared once (found $att)"
+out2=$(python3 ./patch-extra-tools.py "$ex_root" 2>&1)
+has 'a second run is a no-op' 'events list: already applied' "$out2"
+events=$(grep -c 'export function GetListeEvenement' "$ex_root/src/omnivox-api/requests/College.ts")
+((events == 1)) && ok 'the events request is added once' || no "the events request is added once (found $events)"
+printf 'export function Other() {\n    return 1;\n}\n' >"$ex_root/src/omnivox-api/requests/Mio.ts"
+rc=0
+python3 ./patch-extra-tools.py "$ex_root" >/dev/null 2>&1 || rc=$?
+((rc != 0)) && ok 'a moved upstream anchor fails loudly' || no 'a moved upstream anchor fails loudly'
+rm -rf "$ex_root"
+
+# The installer has to call both: fetch the patch, and refuse a build whose tool
+# modules do not all load before the unit is restarted.
+installer=$(cat "$SELF" 2>/dev/null || cat ./omnivox-mcp.sh)
+has 'the installer applies the extra tools patch' 'patch-extra-tools.py' "$installer"
+has 'the installer checks every tool module before shipping' 'toolscheck || warn' "$installer"
+
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

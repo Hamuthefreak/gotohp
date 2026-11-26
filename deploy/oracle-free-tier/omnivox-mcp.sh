@@ -32,6 +32,7 @@ REF=${REF:-main}
 REPO=https://github.com/Beat-YT/omnivox-mcp.git
 PATCH_URL=${PATCH_URL:-https://raw.githubusercontent.com/Hamuthefreak/gotohp/main/deploy/oracle-free-tier/patch-download-guard.py}
 MIO_PATCH_URL=${MIO_PATCH_URL:-https://raw.githubusercontent.com/Hamuthefreak/gotohp/main/deploy/oracle-free-tier/patch-mio-guard.py}
+EXTRA_PATCH_URL=${EXTRA_PATCH_URL:-https://raw.githubusercontent.com/Hamuthefreak/gotohp/main/deploy/oracle-free-tier/patch-extra-tools.py}
 SWAPFILE=${SWAPFILE:-/swapfile}
 SWAP_MB=${SWAP_MB:-2048}
 TZ_NAME=${TZ_NAME:-America/Toronto}
@@ -368,6 +369,25 @@ apply_upstream_patches() {
 	# in an edited file.
 	apply_patch 'download guard' "${PATCH_SOURCE:-$PREFIX/patches/patch-download-guard.py}" "$PATCH_URL"
 	apply_patch 'MIO guard' "${MIO_PATCH_SOURCE:-$PREFIX/patches/patch-mio-guard.py}" "$MIO_PATCH_URL"
+	apply_patch 'extra read tools' "${EXTRA_PATCH_SOURCE:-$PREFIX/patches/patch-extra-tools.py}" "$EXTRA_PATCH_URL"
+}
+
+# A tool module that throws while it loads exits the whole server at startup (the
+# tool list is imported before Express is up), so "is it running" cannot answer
+# "are the tools there". This asks every module without starting the server and
+# refuses the install when one is broken or none registered.
+toolscheck() {
+	local out rc
+	out=$(cd "$APP" && runuser -u "$SVC_USER" -- env HOME="$PREFIX" \
+		OMNIVOX_DATA_DIR="$DATA" PUPPETEER_CACHE_DIR="$PUPPETEER_DIR" \
+		./node_modules/.bin/tsx scripts/toolscheck.ts 2>&1)
+	rc=$?
+	echo "$out" | tail -n 1 | cut -c1-400
+	if ((rc != 0)); then
+		warn 'a tool module failed to load (see above); the server would exit at startup'
+		return 1
+	fi
+	echo "tools registered: $(echo "$out" | tail -n 1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["registered"], "from", d["checked"], "modules")' 2>/dev/null || echo 'unknown')"
 }
 
 apply_patch() {
@@ -397,6 +417,8 @@ do_install() {
 	fetch_source
 	npm_install
 	apply_upstream_patches
+	say "tools"
+	toolscheck || warn "install still done, but the MCP server will not serve until the tool module above is fixed"
 	say "unit"
 	install_unit
 	if [[ $(start_decision) == start ]]; then
@@ -436,6 +458,8 @@ do_update() {
 	fetch_source
 	npm_install
 	apply_upstream_patches
+	say "tools"
+	toolscheck || warn "the MCP server will not serve until the tool module above is fixed"
 	install_unit
 	wait_health || true
 }

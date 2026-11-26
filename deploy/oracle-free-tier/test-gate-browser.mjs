@@ -495,7 +495,12 @@ try {
 	// is signed out, and the page said nothing about what to do.
 	// Throw the switch with the page's own fetch, then reload: going to /stale
 	// as a document would take the page off the gate's origin.
-	await page.evaluate(() => fetch('/frozen').then((response) => response.text()).catch(() => {}));
+	// A fetch() cannot go to /frozen itself: that path is not on the gate, it is
+	// this suite's fake upstream. The dashboard's own /api/summary proxy is what
+	// reaches the fake, and while the state is stale the fake answers even its
+	// health check with "Chrome awake, page and Omnivox no" - exactly a restarted
+	// server whose login expired. A reload then shows what the page makes of it.
+	await page.evaluate(() => fetch('/api/summary', { headers: { accept: 'application/json' } }).then((r) => r.text()).catch(() => {}));
 	await page.reload({ waitUntil: 'domcontentloaded' });
 	console.log(`interception reached: ${seen.slice(-6).join(' ') || 'nothing'} | /frozen answered ${answered.join(', ') || 'nothing'}`);
 	const staleNow = await chips();

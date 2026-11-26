@@ -181,8 +181,10 @@ doc=$(curl -s -D "$tmp/doc.head" -b "$tmp/jar4" -c "$tmp/jar4" "$base/")
 check 'the signed-in dashboard answers 200 here' 200 "$(grep -m1 '^HTTP' "$tmp/doc.head" | awk '{print $2}')"
 contains 'the dashboard links its stylesheet' 'href="/assets/app.css"' "$doc"
 contains 'the dashboard loads its script' 'src="/assets/setup.js"' "$doc"
-if grep -qiE '<script[^>]*>[^<[:space:]]|<style|<[^>]+ on[a-z]+=' <<<"$doc"; then
-	no 'the dashboard has no inline script, style or handler for the CSP to block'
+# A style attribute counts: 'style-src self' refuses it exactly as it refuses
+# a <style> block, and the browser console is where that showed up first.
+if grep -qiE '<script[^>]*>[^<[:space:]]|<style|<[^>]+ on[a-z]+=|<[^>]+ style=' <<<"$doc"; then
+	no "the dashboard has no inline script, style or handler for the CSP to block ($(grep -oiE '<[^>]+ style=[^ >]*' <<<"$doc" | head -n 1))"
 else
 	ok 'the dashboard has no inline script, style or handler for the CSP to block'
 fi

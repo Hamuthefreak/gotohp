@@ -444,6 +444,17 @@ button.primary{background:var(--accent);color:#062015;border-color:transparent;f
 button:hover{filter:brightness(1.08)}
 .muted{color:var(--muted)}.small{font-size:12.5px}
 a{color:var(--accent)}
+/* The policy allows style-src 'self' only, so spacing lives here and not in
+   style attributes the browser would refuse. */
+.row.top{margin-top:16px}
+.row.actions{margin-top:12px}
+.grid.spaced{margin-top:14px}
+.note{margin:14px 0 0}
+.lead{margin-top:0}
+.url{margin:6px 0 14px}
+form.refresh{margin:0 0 12px}
+.token-spaced{margin:8px 0 4px}
+.user{margin-left:auto}
 .token{display:flex;gap:8px;align-items:center}
 .token input{font-family:ui-monospace,monospace;letter-spacing:.02em}
 .banner{border:1px solid #3a2b18;background:#1d1608;color:var(--warn);padding:10px 12px;border-radius:10px;font-size:13px;margin-bottom:16px}
@@ -493,7 +504,7 @@ function loginPage(error = '') {
         <input id="u" name="username" value="${USERNAME}" autocomplete="username" readonly>
         <label for="p">Password</label>
         <input id="p" name="password" type="password" autocomplete="current-password" autofocus>
-        <div class="row" style="margin-top:16px"><button class="primary" type="submit">Sign in</button></div>
+        <div class="row top"><button class="primary" type="submit">Sign in</button></div>
       </form>
     </div>`,
 	);
@@ -518,7 +529,7 @@ function setupPage(error = '') {
         <input id="p" name="password" type="password" autocomplete="new-password">
         <label for="p2">Repeat it</label>
         <input id="p2" name="password2" type="password" autocomplete="new-password">
-        		        <div class="row" style="margin-top:16px"><button class="primary" type="submit">Set password</button></div>
+        <div class="row top"><button class="primary" type="submit">Set password</button></div>
       </form>
     </div>`,
 		'/assets/setup.js',
@@ -533,18 +544,18 @@ function dashboardPage(summary) {
 	return layout(
 		'Omnivox',
 		`<div class="brand"><span class="dot"></span><h1>Omnivox MCP</h1>
-     <span class="muted small" style="margin-left:auto">${summary.user}</span></div>
+     <span class="muted small user">${summary.user}</span></div>
 
     <h2>Service</h2>
     <div class="card">
       <div class="row">${chip('MCP server', caps.ok === true)}${chip('Browser', caps.browser === true)}${chip('Page', caps.page === true)}${chip('Omnivox session', caps.omnivox === true)}${chip('Chrome', caps.sleeping === true ? 'asleep' : 'awake')}</div>
-      <div class="grid" style="margin-top:14px">
+      <div class="grid spaced">
         <div><div class="kv">mcp unit</div><div class="val ${summary.units.mcp === 'active' ? 'ok' : 'bad'}">${summary.units.mcp}</div></div>
         <div><div class="kv">photo relay</div><div class="val ${summary.units.relay === 'active' ? 'ok' : 'bad'}">${summary.units.relay}</div></div>
         <div><div class="kv">disk free</div><div class="val">${summary.disk ? gb(summary.disk.free) : 'n/a'}</div></div>
         <div><div class="kv">memory free</div><div class="val">${summary.memory ? `${Math.round(summary.memory.available / 1024 / 1024)} MB` : 'n/a'}</div></div>
       </div>
-      <p class="muted small" style="margin:14px 0 0">Health answered ${
+      <p class="muted small note">Health answered ${
 				summary.upstream.status === 200 ? '200' : `HTTP ${summary.upstream.status}`
 			}; Chrome asleep means the next request wakes it in about 20 seconds.</p>
     </div>
@@ -552,19 +563,19 @@ function dashboardPage(summary) {
     <h2>MCP endpoint</h2>
     <div class="card">
       <div class="kv">URL</div>
-      <pre style="margin:6px 0 14px">${summary.mcpUrl || 'The tunnel is still starting - reload in a moment.'}</pre>${
+      <pre class="url">${summary.mcpUrl || 'The tunnel is still starting - reload in a moment.'}</pre>${
 				summary.mcpUrl
 					? ''
-					: `<form method="post" action="${API}tunnel/refresh" style="margin:0 0 12px"><button type="submit" id="tunnel-refresh">Look again</button></form>`
+					: `<form class="refresh" method="post" action="${API}tunnel/refresh"><button type="submit" id="tunnel-refresh">Look again</button></form>`
 			}
       <div class="kv">Bearer token</div>
-      <div class="token" style="margin:8px 0 4px">
+      <div class="token token-spaced">
         <input id="token" value="${summary.token}" readonly>
         <button type="button" data-copy="token">Copy</button>
       </div>
       <p class="muted small">Send it as <code>Authorization: Bearer &lt;token&gt;</code> to the URL above. Rotating it
       signs every client out; the dashboard stays signed in.</p>
-      <div class="row" style="margin-top:12px">
+      <div class="row actions">
         <form method="post" action="${API}token/rotate" data-confirm="Rotate the token? Every client using the old one stops working.">
           <button type="submit">Rotate token</button>
         </form>
@@ -574,7 +585,7 @@ function dashboardPage(summary) {
 
     <h2>Client configuration</h2>
     <div class="card">
-      <p class="muted small" style="margin-top:0">For clients that take a URL and a header (Codebuff, Claude Code, Cursor, any MCP over HTTP client):</p>
+      <p class="muted small lead">For clients that take a URL and a header (Codebuff, Claude Code, Cursor, any MCP over HTTP client):</p>
       <pre>{
   "mcpServers": {
     "omnivox": {

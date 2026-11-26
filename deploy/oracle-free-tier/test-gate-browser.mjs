@@ -301,6 +301,10 @@ try {
 	check('the new token works', 200, newStatus);
 	const stillIn = await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
 	check('rotating does not sign the dashboard out', 200, stillIn.status());
+	await page.waitForFunction(() => document.styleSheets.length > 0 && document.getElementById('token'));
+	const ruleCount = await page.evaluate(() => document.styleSheets[0].cssRules.length);
+	if (ruleCount > 20) ok(`the page after rotating is styled too (${ruleCount} rules)`);
+	else no(`the page after rotating is styled too (only ${ruleCount} rules)`);
 
 	// A policy that blocked the page would show up either as a violation or as
 	// an element behaving unlike its own stylesheet. Both fail here.

@@ -201,8 +201,17 @@ function send(res, status, body, headers = {}) {
 	res.end(payload);
 }
 
+// A redirect is still a document the browser will follow into, so it carries
+// the same policy as every page: a bare 303 would answer with no CSP at all.
 function redirect(res, location, headers = {}) {
-	res.writeHead(303, { Location: location, 'Cache-Control': 'no-store', ...headers });
+	res.writeHead(303, {
+		Location: location,
+		'Cache-Control': 'no-store',
+		'Content-Security-Policy': CSP,
+		'X-Content-Type-Options': 'nosniff',
+		'Referrer-Policy': 'no-referrer',
+		...headers,
+	});
 	res.end();
 }
 

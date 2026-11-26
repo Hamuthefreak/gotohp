@@ -266,6 +266,11 @@ fi
 echo 'login'
 curl -s -o /dev/null -b "$tmp/jar" -c "$tmp/jar" "$base/logout"
 check 'the dashboard needs a login again' 303 "$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar" "$base/")"
+# The signed-out redirect is a page the browser follows into, so it carries the
+# same policy; a bare 303 answered with no CSP at all (test-public.sh caught it
+# on the deployed box).
+redir_csp=$(curl -s -o /dev/null -D - -b "$tmp/jar" "$base/" | tr -d '\r' | grep -i '^content-security-policy:' | sed 's/^[^:]*: //')
+contains 'the redirect to the login form carries the CSP' "script-src 'self'" "$redir_csp"
 check 'a wrong password is refused' 401 \
 	"$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/login" -d 'username=2652532&password=wrong-password')"
 check 'a wrong username is refused' 401 \

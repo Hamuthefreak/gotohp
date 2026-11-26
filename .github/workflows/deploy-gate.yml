@@ -17,7 +17,6 @@ on:
       - "deploy/oracle-free-tier/probe-tools.sh"
       - "deploy/oracle-free-tier/test-public.sh"
       - "deploy/oracle-free-tier/patch-mio-guard.py"
-      - "deploy/oracle-free-tier/tool-schemas.py"
       - ".github/workflows/deploy-gate.yml"
   workflow_dispatch:
 
@@ -72,7 +71,6 @@ jobs:
             deploy/oracle-free-tier/omnivox-mcp.sh \
             deploy/oracle-free-tier/patch-download-guard.py \
             deploy/oracle-free-tier/patch-mio-guard.py \
-            deploy/oracle-free-tier/tool-schemas.py \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
           # The probe is only evidence if it can fail: run its self-test, which

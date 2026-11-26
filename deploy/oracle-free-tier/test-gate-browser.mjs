@@ -336,6 +336,10 @@ try {
 	const issued = (setCookie.match(/ovx_session=([^;]*)/) || [])[1] || '';
 	if (signedIn.status === 303 && issued) ok('the throwaway gate signs the browser in');
 	else no(`the throwaway gate signs the browser in (${signedIn.status})`);
+	// Sessions are judged over HTTP in both modes. The browser block builds the
+	// same signed cookie for its pages; these requests are the proof the gate
+	// accepts what it issued and refuses what it did not, and they do not need
+	// a page at all.
 	const withSession = async (value) => {
 		const res = await fetch(`${base}/api/summary`, { headers: value ? { cookie: `ovx_session=${value}` } : {} });
 		return res.status;
@@ -349,7 +353,6 @@ try {
 	else no(`and refuses a session whose signature it did not make (${forged})`);
 	if (anonymous === 401) ok('and refuses a request with no session at all');
 	else no(`and refuses a request with no session at all (${anonymous})`);
-
 	console.log('in the browser');
 	// A page of its own for every load. The browser has reported a page
 	// detached on a second navigation, so each load starts from a page that

@@ -119,12 +119,17 @@ jobs:
             deploy/oracle-free-tier/test-toolscheck.mjs \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
-          # The same suite against the shipped gate, on the box, with the browser
-          # this box already has: the dashboard is clicked through for real on
-          # every deploy. It uses its own throwaway gate and port, so the token
-          # the owner's dashboard shows is never rotated.
+          # The same suite against the shipped gate, on the box. The box's own
+          # Chrome cannot render the gate's page: on this build every
+          # navigation to it comes back detached, whichever mode it launches
+          # in, while a plain page from a local server renders. So the box runs
+          # the page checks over HTTP - the real responses, the shipped CSP,
+          # the script and stylesheet, and the session the gate accepts or
+          # refuses - and GitHub's runner clicks the same page through in Chrome
+          # in the job above. It uses its own throwaway gate and port, so the
+          # token the owner's dashboard shows is never rotated.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n env PUPPETEER_ROOT=/opt/omnivox-mcp/app GATE_BROWSER=on \
+            'sudo -n env PUPPETEER_ROOT=/opt/omnivox-mcp/app GATE_BROWSER=http \
              bash /tmp/ovx-gate-ship/test-gate.sh'
 
           # The probe is only evidence if it can fail: run its self-test, which

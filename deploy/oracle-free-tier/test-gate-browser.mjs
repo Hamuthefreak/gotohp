@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { createHmac } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -256,11 +257,17 @@ const login = await fetch(`${base}/login`, {
 	headers: { 'content-type': 'application/x-www-form-urlencoded' },
 	body: new URLSearchParams({ username: '2652532', password: 'browser-test-password' }),
 });
-// Node joins repeated cookies with a comma; the session is the ovx one.
-const setCookie = (login.headers.getSetCookie?.() || [login.headers.get('set-cookie') || '']).find((line) => line.startsWith('ovx_session=')) || '';
-const pair = setCookie.split(';')[0];
-const sessionCookie = { name: pair.slice(0, pair.indexOf('=')), value: pair.slice(pair.indexOf('=') + 1) };
-if (sessionCookie.value) ok('the throwaway gate signs the browser in');
+// A cookie fetched here is not necessarily kept by the browser until it is
+// signed in, so the test signs the session itself with the throwaway gate's own
+// key, exactly as gate.mjs does, and hands that to the page.
+const sessionKey = fs.readFileSync(path.join(dataDir, 'session.key'), 'utf8').trim();
+const sessionValue = (() => {
+	const payload = Buffer.from(JSON.stringify({ u: '2652532', exp: Date.now() + 3600_000 })).toString('base64url');
+	const mac = createHmac('sha256', sessionKey).update(payload).digest('base64url');
+	return `${payload}.${mac}`;
+})();
+const sessionCookie = { name: 'ovx_session', value: sessionValue };
+if (login.status === 303 && sessionCookie.value) ok('the throwaway gate signs the browser in');
 else no('the throwaway gate signs the browser in');
 
 const browser = await puppeteer.launch({

@@ -17,17 +17,48 @@ on:
       - "deploy/oracle-free-tier/probe-tools.sh"
       - "deploy/oracle-free-tier/test-public.sh"
       - "deploy/oracle-free-tier/patch-mio-guard.py"
+      - "deploy/oracle-free-tier/test-gate.sh"
+      - "deploy/oracle-free-tier/test-gate-browser.mjs"
       - ".github/workflows/deploy-gate.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-gate
-  cancel-in-progress: false
+  concurrency:
+    group: deploy-gate
+    cancel-in-progress: false
 
 jobs:
+  # The dashboard only proves itself through the gatekeeper's own suite, and the
+  # suite needs no box: a fake MCP server and a throwaway gate on loopback, then
+  # headless Chrome driving it. It runs first, so nothing ships unless it holds.
+  gate:
+    name: Dashboard suite in a browser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install a headless browser
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq chromium-browser >/dev/null 2>&1 || sudo apt-get install -y -qq chromium >/dev/null
+          npm install --no-save --silent puppeteer-core@24 >/dev/null
+          echo "CHROME_PATH=$(command -v chromium || command -v chromium-browser)" >> "$GITHUB_ENV"
+          echo "PUPPETEER_ROOT=$PWD" >> "$GITHUB_ENV"
+
+      - name: Run the gate suite
+        env:
+          GATE_BROWSER: auto
+        run: bash deploy/oracle-free-tier/test-gate.sh
+
   deploy:
     name: Install the gate on the relay VM
     runs-on: ubuntu-latest
@@ -68,10 +99,20 @@ jobs:
             deploy/oracle-free-tier/omnivox-gate.sh \
             deploy/oracle-free-tier/probe-tools.sh \
             deploy/oracle-free-tier/test-public.sh \
+            deploy/oracle-free-tier/test-gate.sh \
+            deploy/oracle-free-tier/test-gate-browser.mjs \
             deploy/oracle-free-tier/omnivox-mcp.sh \
             deploy/oracle-free-tier/patch-download-guard.py \
             deploy/oracle-free-tier/patch-mio-guard.py \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
+
+          # The same suite against the shipped gate, on the box, with the browser
+          # this box already has: the dashboard is clicked through for real on
+          # every deploy. It uses its own throwaway gate and port, so the token
+          # the owner's dashboard shows is never rotated.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n env PUPPETEER_ROOT=/opt/omnivox-mcp/app GATE_BROWSER=on \
+             bash /tmp/ovx-gate-ship/test-gate.sh'
 
           # The probe is only evidence if it can fail: run its self-test, which
           # breaks a fake server three ways and demands a non-zero exit naming

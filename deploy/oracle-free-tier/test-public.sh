@@ -81,9 +81,28 @@ fi
 
 # The first-run page is styled and scripted by two files of its own; if either
 # is refused the page still loads, just bare and with dead buttons.
-for asset in /assets/app.css /assets/setup.js; do
-	code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url$asset")
-	[[ $code == 200 ]] && ok "$asset is served" || no "$asset answered $code (the dashboard would render bare)"
+for asset in /assets/app.css:css /assets/setup.js:javascript; do
+	file=${asset%:*}
+	want=${asset#*:}
+	code=$(curl -s -o "$TMP/asset" -D "$TMP/asset.head" -w '%{http_code}' --max-time 30 "$url$file")
+	type=$(grep -i '^content-type:' "$TMP/asset.head" | tr -d '\r' | awk '{print $2}')
+	size=$(wc -c <"$TMP/asset")
+	if [[ $code == 200 && $type == *"$want"* && $size -gt 500 ]]; then
+		ok "$file is served ($type, $size bytes)"
+	else
+		no "$file answered $code $type with $size bytes (the dashboard would render bare or dead)"
+	fi
+done
+
+# The page and every asset have to carry the policy the browser enforces; a
+# missing header here means Chrome runs the page with no restriction at all.
+for path_ in / /assets/app.css /assets/setup.js; do
+	csp=$(curl -s -o /dev/null -D - --max-time 30 "$url$path_" | tr -d '\r' | grep -i '^content-security-policy:' | sed 's/^[^:]*: //')
+	if [[ $csp == *"default-src 'none'"* && $csp == *"script-src 'self'"* ]]; then
+		ok "$path_ carries the dashboard CSP"
+	else
+		no "$path_ answered without the expected CSP ('${csp:-none}')"
+	fi
 done
 
 code=$(curl -s -o /dev/null -D "$TMP/head" -w '%{http_code}' --max-time 30 "$url/")

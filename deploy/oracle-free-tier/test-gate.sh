@@ -159,6 +159,98 @@ check 'the old token stops working' 401 \
 check 'the new token works' 200 \
 	"$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/mcp" -H "Authorization: Bearer $newtok")"
 
+# A jar kept for the session checks, written as well as read: a read-only jar
+# used to keep the cookie that /login had just rotated away under it.
+curl -s -o /dev/null -c "$tmp/jar4" -X POST "$base/login" -d 'username=2652532&password=correct-horse-battery'
+
+echo 'dashboard page: styled, scripted, permitted'
+# The page has to be a styled document, not bare markup: it names a stylesheet,
+# that stylesheet and its script are served with the right type and a real
+# body, and it carries no inline script or style of its own - because the gate
+# sends a policy without 'unsafe-inline', which would block them.
+# /login and /logout above both answer with Set-Cookie, so the jar has to be
+# written as well as read: a read-only jar kept the cookie /logout expired.
+doc=$(curl -s -D "$tmp/doc.head" -b "$tmp/jar4" -c "$tmp/jar4" "$base/")
+check 'the signed-in dashboard answers 200 here' 200 "$(grep -m1 '^HTTP' "$tmp/doc.head" | awk '{print $2}')"
+contains 'the dashboard links its stylesheet' 'href="/assets/app.css"' "$doc"
+contains 'the dashboard loads its script' 'src="/assets/setup.js"' "$doc"
+if grep -qiE '<script[^>]*>[^<[:space:]]|<style|<[^>]+ on[a-z]+=' <<<"$doc"; then
+	no 'the dashboard has no inline script, style or handler for the CSP to block'
+else
+	ok 'the dashboard has no inline script, style or handler for the CSP to block'
+fi
+csp=$(grep -i '^content-security-policy:' "$tmp/doc.head" | tr -d '\r' | sed 's/^[^:]*: //')
+contains 'the dashboard sends a CSP' "script-src 'self'" "$csp"
+contains 'the CSP forbids inline script' "default-src 'none'" "$csp"
+if grep -q 'unsafe-inline' <<<"$csp"; then no 'the CSP keeps unsafe-inline out'; else ok 'the CSP keeps unsafe-inline out'; fi
+css_type=$(curl -s -o "$tmp/app.css" -D "$tmp/css.head" -w '%{http_code}' "$base/assets/app.css")
+css_ct=$(grep -i '^content-type:' "$tmp/css.head" | tr -d '\r' | awk '{print $2}')
+check 'the stylesheet answers 200' 200 "$css_type"
+contains 'the stylesheet is served as CSS' 'text/css' "$css_ct"
+css_size=$(wc -c <"$tmp/app.css")
+((css_size > 2000)) && ok "the stylesheet has its rules ($css_size bytes)" || no "the stylesheet has its rules (only $css_size bytes)"
+contains 'the stylesheet styles the cards the page uses' '.card{' "$(cat "$tmp/app.css")"
+js_type=$(curl -s -o "$tmp/setup.js" -D "$tmp/js.head" -w '%{http_code}' "$base/assets/setup.js")
+js_ct=$(grep -i '^content-type:' "$tmp/js.head" | tr -d '\r' | awk '{print $2}')
+check 'the script answers 200' 200 "$js_type"
+contains 'the script is served as JavaScript' 'text/javascript' "$js_ct"
+js=$(cat "$tmp/setup.js")
+contains 'Copy is wired to the clipboard' 'navigator.clipboard.writeText' "$js"
+contains 'Copy reads the field the button names' "box.dataset.copy" "$js"
+contains 'Copy shows its feedback' "textContent = 'Copied'" "$js"
+contains 'Rotate is wired through its form' 'action="/api/token/rotate"' "$doc"
+contains 'Rotate carries its confirmation prompt' 'data-confirm="Rotate the token?' "$doc"
+contains 'Rotate asks before it acts' "if (!window.confirm(form.dataset.confirm))" "$js"
+# The Copy button must point at a field that exists, or the click does nothing.
+copy_id=$(grep -oE 'data-copy="[a-z]+"' <<<"$doc" | head -n 1 | sed 's/.*="//;s/"//')
+if [[ -n $copy_id ]] && grep -q "id=\"$copy_id\"" <<<"$doc"; then
+	ok "the Copy button targets a field on the page (#$copy_id)"
+else
+	no "the Copy button targets a field on the page (#${copy_id:-none})"
+fi
+
+echo 'dashboard session'
+# A session must not wear out: twelve page views in a row on one cookie jar, each
+# a fresh authenticated render. A bounce to /login or /setup, or a 401, fails.
+views_ok=0
+views_bad=''
+for view in $(seq 1 14); do
+	code=$(curl -s -o "$tmp/view.$view" -D "$tmp/view.head" -b "$tmp/jar4" -c "$tmp/jar4" -w '%{http_code}' "$base/")
+	if [[ $code == 200 ]] && grep -q 'Bearer token' "$tmp/view.$view" && grep -q "$(cat "$token_file")" "$tmp/view.$view"; then
+		views_ok=$((views_ok + 1))
+	else
+		views_bad+="$view:$code "
+	fi
+done
+check 'fourteen sequential dashboard views all answer authenticated 200' 14 "$views_ok"
+[[ -z $views_bad ]] || no "every view is authenticated (bad views: $views_bad)"
+grep -qi '^set-cookie' "$tmp/view.head" && no 'a plain page view does not re-issue the session' || ok 'a plain page view does not re-issue the session'
+# The throttling counts wrong passwords per ip. It must not lock out a session
+# that is already signed in, nor a sign-in from a different address.
+for _ in $(seq 1 11); do curl -s -o /dev/null -H 'CF-Connecting-IP: 198.51.100.4' -X POST "$base/login" -d 'username=2652532&password=typo-typo-typo'; done
+check 'the right password is refused from a throttled ip' 429 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -H 'CF-Connecting-IP: 198.51.100.4' -X POST "$base/login" -d 'username=2652532&password=correct-horse-battery')"
+check 'the throttled ip still sees its own dashboard' 200 \
+	"$(curl -s -o "$tmp/after" -w '%{http_code}' -b "$tmp/jar4" "$base/")"
+grep -q 'Bearer token' "$tmp/after" && ok 'and that page is the real dashboard' || no 'and that page is the real dashboard'
+check 'a different ip signs in normally' 303 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/login" -H 'CF-Connecting-IP: 203.0.113.9' -d 'username=2652532&password=correct-horse-battery')"
+
+if [[ ${GATE_BROWSER:-auto} != off ]]; then
+	echo 'dashboard in a real browser'
+	set +e
+	PUPPETEER_ROOT=${PUPPETEER_ROOT:-} CHROME_PATH=${CHROME_PATH:-} node ./test-gate-browser.mjs ./gate.mjs
+	browser_rc=$?
+	set -e
+	if ((browser_rc == 0)); then
+		ok 'the browser test passed (see its checks above)'
+	elif ((browser_rc == 2)); then
+		echo '  skip no headless browser here: the styles, CSP, Copy and Rotate are proven at HTTP/JS level only'
+	else
+		no 'the browser test passed'
+	fi
+fi
+
 echo 'login'
 curl -s -o /dev/null -b "$tmp/jar" -c "$tmp/jar" "$base/logout"
 check 'the dashboard needs a login again' 303 "$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar" "$base/")"
@@ -179,7 +271,8 @@ check 'a wrong password does not kill the session' 200 \
 check 'the stylesheet is served' 200 "$(curl -s -o /dev/null -w '%{http_code}' "$base/assets/app.css")"
 check 'the setup script is served' 200 "$(curl -s -o /dev/null -w '%{http_code}' "$base/assets/setup.js")"
 check 'wrong passwords alone are what gets throttled' 303 \
-	"$(curl -s -o /dev/null -w '%{http_code}' -c "$tmp/jar3" -X POST "$base/login" -d 'username=2652532&password=correct-horse-battery')"
+	"$(curl -s -o /dev/null -w '%{http_code}' -c "$tmp/jar3" -X POST "$base/login" -H 'CF-Connecting-IP: 203.0.113.9' -d 'username=2652532&password=correct-horse-battery')"
+check 'and that new session renders' 200 "$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar3" "$base/")"
 
 echo 'brute force'
 codes=''

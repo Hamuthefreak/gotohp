@@ -37,6 +37,23 @@ if [[ -z $url ]]; then
 fi
 echo "public url: $url"
 
+# A quick tunnel registers its hostname a moment after cloudflared starts, so
+# the first request of a fresh install can answer 000. Wait for the host to
+# serve /healthz before asserting anything; a deploy that skipped this failed
+# six checks against a tunnel that was up seconds later.
+ready=no
+for _ in $(seq 1 30); do
+	if [[ $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url/healthz") == 200 ]]; then
+		ready=yes
+		break
+	fi
+	sleep 2
+done
+if [[ $ready == no ]]; then
+	echo "the tunnel never answered at $url/healthz" >&2
+	exit 1
+fi
+
 # Never printed: this is the same secret the dashboard shows.
 token=$(bash "$GATE_BIN" token) || {
 	echo 'could not get the mcp token' >&2

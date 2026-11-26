@@ -267,8 +267,8 @@ export async function ResolveMioAttachment(messageId: string, attachmentId: stri
 # ever started, so a broken build is reported instead of crash-looping.
 TOOLCHECK_FILE = 'scripts/toolscheck.ts'
 
-TOOLCHECK = '''// Prints { ok, checked, failures } for every tool module, without starting the
-// server: `npx tsx scripts/toolscheck.ts`. A module that throws while it loads
+TOOLCHECK = '''// Prints { ok, checked, registered, unique, failures } for every tool module,
+// without starting the server: `npx tsx scripts/toolscheck.ts`. A module that throws while it loads
 // registers none of its tools and exits the server at startup, so the installer
 // runs this first and refuses a build whose tool list would be incomplete.
 import * as fs from 'fs';
@@ -302,8 +302,12 @@ for (const file of files.sort()) {
 
 const { mcpServer } = require(path.join(process.cwd(), 'src', 'mcp', 'server'));
 const registered = Object.keys((mcpServer as any)._registeredTools ?? {}).length;
-console.log(JSON.stringify({ ok: failures.length === 0 && registered > 0, checked: files.length, registered, failures }));
-process.exit(failures.length === 0 ? 0 : 1);
+const unique = new Set(files.map((file) => path.basename(file, path.extname(file))));
+const duplicate = files.length !== unique.size;
+console.log(
+    JSON.stringify({ ok: failures.length === 0 && registered > 0 && !duplicate, checked: files.length, registered, unique: unique.size, failures }),
+);
+process.exit(failures.length === 0 && !duplicate ? 0 : 1);
 '''
 
 def patch_file(path: pathlib.Path, anchor: str, addition: str, marker: str, label: str) -> bool:

@@ -25,17 +25,9 @@ set -uo pipefail
 
 if [[ ${1:-} == --self-test ]]; then
 	python3 - "$0" <<'PY'
-import json
-import os
-import subprocess
-import sys
-import tempfile
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-
-script = str(Path(sys.argv[1]).resolve())
-
+# What the fake account in --self-test serves, kept where both halves of the
+# file can see it: the tools a real server lists, the ones that write, and the
+# account-wide reads whose answers must not be blank.
 TOOLS = [
     'get-courses-summary', 'get-terms', 'get-mio-messages', 'get-mio-folders',
     'get-course-info', 'get-course-assignments', 'get-course-announcements',
@@ -67,7 +59,21 @@ STATIC_TOOLS = {
     'get-cancelled-classes', 'get-calendar', 'get-college-list',
     'get-college-news', 'get-college-documents', 'get-online-forms',
 }
+# The reads the mission names: each is called without any id by a client, and
+# each has to come back with an answer that shows something, not a blank page.
 BOGUS_UUID = '00000000-0000-0000-0000-000000000000'
+
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+script = str(Path(sys.argv[1]).resolve())
 
 state = {'mode': 'none', 'downloads': Path('.')}
 
@@ -120,9 +126,15 @@ class Fake(BaseHTTPRequestHandler):
             self.reply(400, f'Message {args.get("message_id")} has no attachment {args.get("attachment_id")}. It lists: poster.pdf ({ATT_ID}).')
             return
         if name == 'get-mio-message-link':
-            self.reply(200, 'link ok')
+            # A real save, in the shape the tool reports it, so the check on the
+            # file it says it wrote has something to find.
+            out = downloads / 'poster.pdf'
+            out.write_bytes(b'%PDF-1.4 poster\n')
+            self.reply(200, f'File saved to: {out}')
             return
         if name == 'get-college-documents':
+            # The list its own file tool reads back from: same shape as the live
+            # answer, so a broken list would leave the link tool without an id.
             self.reply(200, '# College documents (1)\n\n## Registrar guide\n- File: PDF, 46 KB\n- ID: 33333333-3333-4333-8333-333333333333')
             return
         if name == 'get-college-document-link' and args.get('document_id') == '33333333-3333-4333-8333-333333333333':
@@ -203,7 +215,7 @@ class Fake(BaseHTTPRequestHandler):
         bodies = {
             'get-courses-summary': 'Your courses\n- Introduction (ENG1.1234)\n',
             'get-terms': 'Fall 2026 {"default_term":"20263","terms":[{"id":"20263","name":"Fall 2026"}]}',
-            'get-mio-messages': f'inbox\n- {MSG_ID} hello\n',
+            'get-mio-messages': f'inbox\n- Message \u00ab hello \u00bb\n- ID: {MSG_ID}\n',
             'get-mio-folders': 'INBOX\nSent',
             'get-course-assignments': '- ID: ASG1\n',
             'get-course-documents': '- ID: DOC1\n',
@@ -295,7 +307,29 @@ key=$(cat "$KEY_FILE" 2>/dev/null || true)
 	exit 1
 }
 
-python3 - "$BASE" "$key" "$DOWNLOADS" <<'PY'
+python3 - "$BASE" "$key" "$DOWNLOADS" <<'PROBE'
+TOOLS = [
+    'get-courses-summary', 'get-terms', 'get-mio-messages', 'get-mio-folders',
+    'get-course-info', 'get-course-assignments', 'get-course-announcements',
+    'get-course-documents', 'get-course-evals', 'get-course-people',
+    'get-assignment-detail', 'get-assignment-submit-link', 'get-assignment-file-link',
+    'get-document-link', 'read-mio-message', 'get-mio-attachment-link',
+    'search-mio-messages', 'search-people', 'get-service-link',
+    'send-mio-message', 'reply-mio-message', 'delete-mio-message',
+    'move-mio-message', 'restore-mio-message', 'flag-mio-message',
+    'create-mio-folder',
+    'get-absences', 'get-assignments-summary', 'get-calendar',
+    'get-cancelled-classes', 'get-college-documents', 'get-college-list',
+    'get-college-news', 'get-grades-summary', 'get-online-forms',
+    'get-overview', 'get-schedule', 'get-teachers',
+    'get-college-document-link', 'get-mio-message-link', 'get-campus-events',
+]
+ACCOUNT_TOOLS = {
+    'get-overview', 'get-schedule', 'get-absences', 'get-teachers',
+    'get-grades-summary', 'get-assignments-summary', 'get-cancelled-classes',
+    'get-calendar', 'get-college-list', 'get-college-news',
+    'get-college-documents', 'get-online-forms',
+}
 import json
 import re
 import sys
@@ -498,27 +532,53 @@ for course, _ in documents[:1]:
 
 # ---------------------------------------------------------------- mio
 print()
-message_ids = list(dict.fromkeys(re.findall(
-    r'\b([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\b',
-    harvest['get-mio-messages'],
-)))
+# The ids as the listing writes them, with whatever separator it uses put back
+# to a dash so the call gets a plain uuid.
+message_ids = list(dict.fromkeys(
+    ''.join(m) for m in re.findall(
+        r'\b([0-9A-Fa-f]{8})[- ]([0-9A-Fa-f]{4})[- ]([0-9A-Fa-f]{4})[- ]([0-9A-Fa-f]{4})[- ]([0-9A-Fa-f]{12})\b',
+        harvest['get-mio-messages'],
+    )
+))
+if not message_ids:
+    failures.append(('get-mio-messages listed no id', 200, harvest['get-mio-messages'][:200]))
+    print(f'{"read-mio-message":<46} {"":<4} <-- FAIL (no message id in the inbox listing)')
 attachment = None
 for mid in message_ids[:1]:
     status, body, _ = call('read-mio-message', {'message_id': mid})
     report('read-mio-message', status, body, limit=110)
+    # read-mio-message lists each attachment as "[attachment_id: ...]".
     match = re.search(r'attachment_id: ([0-9A-Fa-f-]{8,})', body)
     if match:
         attachment = (mid, match.group(1))
 
 if attachment:
     mid, att = attachment
+    # The link tool the server ships upstream reads a real attachment too, and
+    # the new tool must not replace it.
     status, body, _ = call('get-mio-attachment-link', {'message_id': mid, 'attachment_id': att})
     report('get-mio-attachment-link', status, body, limit=110)
-    status, body, _ = call('get-mio-attachment-link', {'message_id': mid, 'attachment_id': BOGUS_UUID})
-    report('get-mio-attachment-link (bogus)', status, body, expect_error=True, limit=110)
+    started = time.time()
+    status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': att})
+    report('get-mio-message-link', status, body, limit=110)
+    saved = re.search(r'File saved to: (\S+)', body)
+    st = None
+    try:
+        st = Path(saved.group(1)).stat() if saved else None
+    except OSError:
+        st = None
+    if st is not None and st.st_size > 0 and st.st_mtime >= started - 2:
+        print(f'{"  it saved the attachment":<46} {"":<4} wrote {saved.group(1)} ({st.st_size} bytes)')
+    else:
+        failures.append(('get-mio-message-link saved nothing', status, body[:300]))
+        print(f'{"  it saved the attachment":<46} {"":<4} <-- FAIL (no fresh file in the answer)')
+    # A message that does not own that attachment is refused without asking
+    # Omnivox: the matrix below covers every wrong pair on the live account.
+    status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': BOGUS_UUID})
+    report('get-mio-message-link (bogus attachment)', status, body, expect_error=True, limit=110)
 else:
     failures.append(('read-mio-message had no attachment to test', 0, ''))
-    print(f'{"get-mio-attachment-link":<46} {"":<4} <-- FAIL (no attachment id found)')
+    print(f'{"get-mio-message-link":<46} {"":<4} <-- FAIL (no attachment id found)')
 
 for name, args in (
     ('search-mio-messages', {'query': 'vanier'}),
@@ -573,6 +633,8 @@ if not term:
     failures.append(('harvest term', 0, harvest['get-terms'][:200]))
     print(f'{"harvest term":<46} {"":<4} <-- FAIL (no term id in get-terms)')
 
+# The user's own questions, each answered by a tool that has to show it read
+# this account instead of returning a blank page.
 for name, args in (
     ('get-overview', {'term_id': term} if term else {}),
     ('get-schedule', {'term_id': term} if term else {}),
@@ -589,7 +651,17 @@ for name, args in (
     ('get-online-forms', {}),
 ):
     status, body, _ = call(name.split(' ')[0], args)
-    report(f'{name} ({term})' if term and 'term_id' in args else name, status, body, limit=110)
+    answer = f'{name} ({term})' if term and 'term_id' in args else name
+    harvest[name.split(' ')[0]] = body
+    report(answer, status, body, limit=110)
+    if status == 200 and name.split(' ')[0] in ACCOUNT_TOOLS and len(' '.join(body.split())) < 20:
+        failures.append((answer, status, 'empty answer'))
+        print(f'{"  it has something to say":<46} {"":<4} <-- FAIL (blank answer from a read that has one)')
+
+# The upcoming schedule the mission asks for: the next seven days.
+if term:
+    status, body, _ = call('get-schedule', {'term_id': term, 'days': 7})
+    report('get-schedule (the next 7 days)', status, body, limit=110)
 
 # The term-free form of every term tool: the same call minus term_id.
 for name in (
@@ -599,53 +671,40 @@ for name in (
     status, body, _ = call(name, {})
     report(f'  {name} (no term_id)', status, body, limit=70)
 
-# ---------------------------------------------------------------- new read tools
-# The three tools this deployment adds on top of upstream. Each is called with a
-# real id from the account; the file one has to leave a real file on disk, like
-# get-document-link has to.
-print()
-college_json_status, college_json, _ = call('get-college-documents', {})
-first_college = None
-if college_json_status == 200:
-    ids = re.findall(r'- ID: ([0-9a-fA-F-]{36})', college_json)
-    first_college = ids[0] if ids else None
-if first_college:
+# The three tools this deployment adds on top of upstream, each with the file
+# it is supposed to leave behind or the list it is supposed to refuse.
+college = re.findall(r'- ID: ([0-9a-fA-F-]{36})', harvest['get-college-documents'])
+if college:
     started = time.time()
-    status, body, _ = call('get-college-document-link', {'document_id': first_college})
-    if report('get-college-document-link', status, body, limit=120):
-        match = re.search(r'File saved to: (\S+)', body)
-        saved = Path(match.group(1)) if match else None
-        try:
-            st = saved.stat() if saved else None
-        except OSError:
-            st = None
-        if st is not None and st.st_size > 0 and st.st_mtime >= started - 2:
-            print(f'{"":<46} {"":<4} wrote {saved} ({st.st_size} bytes)')
-        else:
-            failures.append(('get-college-document-link saved nothing usable', status, str(saved)))
-            print(f'{"":<46} {"":<4} <-- FAIL (reported {saved}, which is missing, empty or stale)')
-    status, body, _ = call('get-college-document-link', {'document_id': '00000000-0000-0000-0000-000000000000'})
-    report('get-college-document-link (bogus)', status, body, expect_error=True, limit=120)
-else:
-    failures.append(('get-college-documents gave no document id', college_json_status, ''))
-    print(f'{"get-college-document-link":<46} {"":<4} <-- FAIL (no document id to try)')
-
-if attachment:
-    mid, att = attachment
-    status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': att})
-    report('get-mio-message-link', status, body, limit=120)
-    status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': BOGUS_UUID})
-    report('get-mio-message-link (bogus)', status, body, expect_error=True, limit=120)
-    # The refusal has to be the message's own answer, not Omnivox's bare 404.
-    text = ' '.join(body.split())
-    if 'has no attachment' in text:
-        rejected += 0
+    status, body, _ = call('get-college-document-link', {'document_id': college[0]})
+    report('get-college-document-link', status, body, limit=110)
+    match = re.search(r'File saved to: (\S+)', body)
+    saved = Path(match.group(1)) if match else None
+    try:
+        st = saved.stat() if saved else None
+    except OSError:
+        st = None
+    if st is not None and st.st_size > 0 and st.st_mtime >= started - 2:
+        print(f'{"  it saved the file":<46} {"":<4} wrote {saved} ({st.st_size} bytes)')
     else:
-        failures.append(('get-mio-message-link (bogus) not checked locally', status, text[:300]))
-        print(f'{"  it names the attachments that exist":<46} {"":<4} <-- FAIL (a bogus id reached Omnivox)')
+        failures.append(('get-college-document-link saved nothing', status, str(saved)))
+        print(f'{"  it saved the file":<46} {"":<4} <-- FAIL (reported {saved})')
+    status, body, _ = call('get-college-document-link', {'document_id': BOGUS_UUID})
+    report('get-college-document-link (bogus)', status, body, expect_error=True, limit=110)
+else:
+    failures.append(('get-college-documents listed no id', 200, harvest['get-college-documents'][:200]))
+    print(f'{"get-college-document-link":<46} {"":<4} <-- FAIL (no college document id to fetch)')
 
 status, body, _ = call('get-campus-events', {})
 report('get-campus-events', status, body, limit=110)
+
+# Every tool a server lists must be one this probe knows, so an upstream tool -
+# a write tool included - cannot slip in unaccounted for.
+print()
+unknown = sorted(set(tools) - set(TOOLS))
+if unknown:
+    failures.append(('tools the probe does not know', 0, ', '.join(unknown)))
+    print(f'not in the probe: {", ".join(unknown)}')
 
 # ---------------------------------------------------------------- coverage
 print()
@@ -661,4 +720,4 @@ if failures:
         print(f'  - {label}: {status} {text[:200]}')
     raise SystemExit(1)
 print('probe: every tool answered or rejected bad input, no error page reported as success')
-PY
+PROBE

@@ -117,8 +117,22 @@ export function hasPassword() {
 
 // ---------------------------------------------------------------- sessions
 
-ensureDir();
-const secret = ensureSecret(FILES.secret);
+function isEntryPoint() {
+	return Boolean(process.argv[1]) && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+}
+
+// A module that is only imported may not own the data directory: it is made
+// when the server starts (createServer), not when a suite renders one page.
+if (isEntryPoint()) ensureDir();
+// A read of the key file only: reading is what a suite may do to an imported
+// module. A server that has none makes one when it starts.
+const secret = () => {
+	try {
+		return fs.readFileSync(FILES.secret);
+	} catch {
+		return Buffer.alloc(0);
+	}
+};
 
 function b64url(buf) {
 	return Buffer.from(buf).toString('base64Url');
@@ -126,7 +140,7 @@ function b64url(buf) {
 
 function signSession(user) {
 	const payload = b64url(JSON.stringify({ u: user, exp: Date.now() + SESSION_TTL }));
-	const mac = b64url(crypto.createHmac('sha256', secret).update(payload).digest());
+	const mac = b64url(crypto.createHmac('sha256', secret()).update(payload).digest());
 	return `${payload}.${mac}`;
 }
 
@@ -135,7 +149,7 @@ function readSession(cookieHeader) {
 	if (!raw) return null;
 	const [payload, mac] = raw.split('.');
 	if (!payload || !mac) return null;
-	const expect = b64url(crypto.createHmac('sha256', secret).update(payload).digest());
+	const expect = b64url(crypto.createHmac('sha256', secret()).update(payload).digest());
 	if (!crypto.timingSafeEqual(sha(mac), sha(expect))) return null;
 	try {
 		const data = JSON.parse(Buffer.from(payload, 'base64Url').toString('utf8'));
@@ -1138,7 +1152,7 @@ function createServer() {
 	});
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const isMain = isEntryPoint();
 if (isMain) {
 	createServer().listen(PORT, '127.0.0.1', () => {
 		const st = state();
@@ -1150,4 +1164,7 @@ if (isMain) {
 	// imported by the tests
 }
 
-export { createServer, hashPassword, checkPassword, signSession, readSession, tunnelUrl };
+// The page is rendered without touching the data directory, so the suites can
+// build the one state a check needs and read it.
+export const pageFor = (summary) => dashboardPage(summary);
+export { createServer, dashboardPage, hashPassword, checkPassword, signSession, readSession, tunnelUrl };

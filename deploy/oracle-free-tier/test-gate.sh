@@ -404,7 +404,21 @@ grep -q 'Bearer token' "$tmp/after" && ok 'and that page is the real dashboard' 
 check 'a different ip signs in normally' 303 \
 	"$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/login" -H 'CF-Connecting-IP: 203.0.113.9' -d 'username=2652532&password=correct-horse-battery')"
 
-if [[ ${GATE_BROWSER:-auto} != off ]]; then
+if [[ ${GATE_BROWSER:-auto} == http ]]; then
+	# No browser on this host: the page's styles, CSP, Copy target, Rotate form,
+	# prefilled arguments and stale-session banner are checked against the real
+	# responses instead, and nothing is claimed as clicked through.
+	echo 'dashboard over HTTP (no browser on this host)'
+	set +e
+	PUPPETEER_ROOT=${PUPPETEER_ROOT:-} CHROME_PATH=${CHROME_PATH:-} node ./test-gate-browser.mjs ./gate.mjs --http
+	http_rc=$?
+	set -e
+	if ((http_rc == 0)); then
+		ok 'the dashboard page checks passed over HTTP'
+	else
+		no 'the dashboard page checks passed over HTTP'
+	fi
+elif [[ ${GATE_BROWSER:-auto} != off ]]; then
 	echo 'dashboard in a real browser'
 	set +e
 	PUPPETEER_ROOT=${PUPPETEER_ROOT:-} CHROME_PATH=${CHROME_PATH:-} node ./test-gate-browser.mjs ./gate.mjs

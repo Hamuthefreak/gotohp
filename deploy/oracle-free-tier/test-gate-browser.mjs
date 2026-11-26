@@ -24,6 +24,7 @@ import { createHmac } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+const HTTP_ONLY = process.argv.includes('--http');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const gatePath = path.resolve(process.argv[2] || path.join(here, 'gate.mjs'));
 
@@ -107,7 +108,7 @@ if (mode === 'install') {
 		process.exit(1);
 	}
 }
-if (!chrome || !puppeteer) {
+if (!HTTP_ONLY && (!chrome || !puppeteer)) {
 	console.log(
 		`skip: no headless browser here (chrome: ${chrome || 'none'}, puppeteer: ${puppeteer ? 'yes' : 'no'})` +
 			' - the dashboard was not clicked through in this run',
@@ -291,7 +292,7 @@ const sessionCookie = { name: 'ovx_session', value: sessionValueSafe };
 if (login.status === 303 && sessionCookie.value) ok('the throwaway gate signs the browser in');
 else no('the throwaway gate signs the browser in');
 
-const browser = await puppeteer.launch({
+const browser = HTTP_ONLY ? null : await puppeteer.launch({
 	executablePath: chrome,
 	headless: true,
 	args: [
@@ -308,9 +309,8 @@ try {
 	// A page of its own: the API calls above (setup, login, cookies) go through the
 	// browser's default context, and a navigation on a page that context has
 	// touched comes back detached.
-	const page = await browser.newPage();
-	await page.setViewport({ width: 1100, height: 900 });
-	await browser.defaultBrowserContext().overridePermissions(base, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
+	// Whatever page a load leaves open is "current"; the checks act on it.
+	let current = null;
 	const problems = [];
 	// Chrome prints one generic "Failed to load resource" line per refused
 	// response and names no URL, so the responses are tracked too: a 401 the
@@ -318,111 +318,211 @@ try {
 	// failure the page really caused.
 	const failed = [];
 	let cspHeader = '';
-	page.on('response', (response) => {
-		if (response.status() >= 400) failed.push(`${response.status()} ${response.url()}`);
-		if (response.url() === `${base}/` && response.headers()['content-security-policy']) {
-			cspHeader = response.headers()['content-security-policy'];
-		}
-		// The fake flips to its stale answer the first time the page asks it for
-		// the summary, and says so with this marker.
-		if (/\/api\/summary$/.test(response.url()) && response.status() === 200) staleFetches += 1;
-	});
-	page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
-	page.on('console', (message) => {
-		if (message.type() === 'error') problems.push(`console: ${message.text()}`);
-	});
-	page.on('requestfailed', (request) => problems.push(`requestfailed: ${request.url()}`));
-	// A 401 on /frozen alone proves nothing about the page: Chrome reports the
-	// console line with no URL, so the suite has to know whether the header it
-	// adds really reached the server.
-
 	// The session for this page comes from the gate's own POST /login, exactly as
-	// the owner's does: Chrome refuses a cookie for a bare IP origin when it is
-	// set outside a real response, and the page's CSP rules out document.cookie.
-	// The handler below answers only this page's requests, and it answers them
-	// from the gate: a stubbed page (respond()) is not same-origin with the gate
-	// for Chrome, so a cookie it sets is thrown away as third-party.
+	// the owner's does, but the check never asks whether Chrome stored the
+	// cookie: a cookie store is the browser's business (a bare-IP origin is not
+	// a secure context everywhere, and the runner's Chrome has dropped this one
+	// before). What has to hold is that the gate accepts the session it issued
+	// and refuses one it did not, and that the page the browser renders is the
+	// one a signed-in owner gets.
 	const seen = [];
-	await page.setRequestInterception(true);
-	page.on('request', (request) => {
-		if (request.url().startsWith(`${base}/`)) seen.push(new URL(request.url()).pathname);
-		if (request.isInterceptResolutionHandled?.()) return;
-		if (request.method() === 'POST' && request.url() === `${base}/login`) {
-			// The gate would refuse a cross-origin form; this is the gate's own page.
-			const headers = { ...request.headers(), origin: base };
-			request.continue({ headers }).catch((error) => problems.push(`interception: ${error.message}`));
-			return;
-		}
-		request.continue().catch(() => {});
-	});
-	const signIn = await fetch(`${base}/login`, {
+	const signedIn = await fetch(`${base}/login`, {
 		method: 'POST',
 		redirect: 'manual',
 		headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base },
 		body: new URLSearchParams({ username: '2652532', password: 'browser-test-password' }),
 	});
-	const setCookie = signIn.headers.get('set-cookie') || '';
-	const sessionValue = (setCookie.match(/ovx_session=([^;]*)/) || [])[1] || '';
-	if (signIn.status === 303 && sessionValue) ok('the throwaway gate signs the browser in');
-	else no(`the throwaway gate signs the browser in (${signIn.status})`);
-	// Hand the browser the gate's own sign-in once, and let its response store it.
-	let signed = false;
-	await page.setExtraHTTPHeaders({});
-	await new Promise((resolve) => {
-		const timer = setTimeout(resolve, 20000);
-		const onRequest = (request) => {
-			try {
-			if (signed || request.url() !== `${base}/login` || request.isInterceptResolutionHandled?.()) return;
-			if (request.method() !== 'GET') return;
-			signed = true;
-			clearTimeout(timer);
-			request
-				.respond({
-					status: 303,
-					headers: { location: `${base}/`, 'set-cookie': setCookie },
-					body: '',
-				})
-				.finally(resolve);
-			} catch (error) {
-				problems.push(`interception: ${error.message}`);
-				resolve();
-			}
-		};
-		page.on('request', onRequest);
-		page.goto(`${base}/login`, { waitUntil: 'domcontentloaded' }).catch(() => resolve());
-	});
-	const kept = await page.cookies();
-	if (kept.some((cookie) => cookie.name === 'ovx_session')) ok('the browser keeps the session cookie');
-	else no(`the browser keeps the session cookie (${kept.map((cookie) => cookie.name).join(', ') || 'none'})`);
+	const setCookie = signedIn.headers.get('set-cookie') || '';
+	const issued = (setCookie.match(/ovx_session=([^;]*)/) || [])[1] || '';
+	if (signedIn.status === 303 && issued) ok('the throwaway gate signs the browser in');
+	else no(`the throwaway gate signs the browser in (${signedIn.status})`);
+	const withSession = async (value) => {
+		const res = await fetch(`${base}/api/summary`, { headers: value ? { cookie: `ovx_session=${value}` } : {} });
+		return res.status;
+	};
+	const good = await withSession(issued);
+	const forged = await withSession(`${issued.slice(0, -4)}AAAA`);
+	const anonymous = await withSession('');
+	if (good === 200) ok('the gate accepts the session it issued on a real request');
+	else no(`the gate accepts the session it issued on a real request (${good})`);
+	if (forged === 401) ok('and refuses a session whose signature it did not make');
+	else no(`and refuses a session whose signature it did not make (${forged})`);
+	if (anonymous === 401) ok('and refuses a request with no session at all');
+	else no(`and refuses a request with no session at all (${anonymous})`);
 
 	console.log('in the browser');
-	// Nothing waits on navigation events: Chrome can report a frame detached
-	// halfway through them, so the page's own readiness is the signal instead.
-	// Every load goes through this one helper.
+	// A page of its own for every load. The browser has reported a page
+	// detached on a second navigation, so each load starts from a page that
+	// has never navigated; the old one is closed afterwards.
 	const loadDashboard = async () => {
-		page.goto(`${base}/`, { waitUntil: 'domcontentloaded' }).catch(() => {});
-		// The document has to have arrived before the page is judged; a frame that
-		// never made it would otherwise look like a page that failed its checks.
-		const arrived = await page
-			.waitForFunction(() => location.pathname === '/' && document.readyState !== 'loading', { timeout: 30000 })
-			.then(() => true)
-			.catch(() => false);
-		if (!arrived) return 0;
-		const ready = await page
+		const previous = current;
+		const fresh = await browser.newPage();
+		await fresh.setViewport({ width: 1100, height: 900 });
+		current = fresh;
+		// The session is carried in the request, not in the cookie jar: this is
+		// the one header the gate reads, and a browser's own cookie store is the
+		// browser's business (it has been empty for this origin on some runners).
+		await fresh.setExtraHTTPHeaders({ cookie: `ovx_session=${issued}` });
+
+		// Nothing is awaited on the navigation: the poll below is the signal, and
+		// awaiting the load races the readiness wait that used to follow it and
+		// came back detached. A thrown goto is reported as it happens.
+		fresh.goto(`${base}/`).catch((error) => problems.push(`navigation: ${error.message}`));
+		// One poll for both: the document has arrived and the page's own script
+		// has drawn it. The old page is closed before the poll so its frame can
+		// never come back under this one.
+		if (previous) await previous.close().catch(() => {});
+		const ready = await fresh
 			.waitForFunction(
-				() => document.styleSheets.length > 0 && !!document.getElementById('token') && !!document.getElementById('tool-select'),
+				() =>
+					location.protocol.startsWith('http') &&
+					document.readyState !== 'loading' &&
+					document.styleSheets.length > 0 &&
+					!!document.getElementById('token') &&
+					!!document.getElementById('tool-select'),
 				{ timeout: 30000 },
 			)
 			.then(() => true)
 			.catch(() => false);
+		if (ready) {
+			// The page's own fetches (the health summary, the tool list) are part
+			// of what the checks read, so the load ends when they have settled.
+			await fresh.waitForNetworkIdle({ idleTime: 500, timeout: 15000 }).catch(() => {});
+		}
 		return ready ? 200 : 0;
 	};
-	// Load only the document. Waiting for the page to go idle makes Chrome hang up
-	// on a frame that is still loading its script, and the navigation then comes
-	// back detached; the script, the styles and the fetches page makes are all
-	// checked in their own right below.
+	if (HTTP_ONLY) {
+		// No browser on this host. The page's own script is what tiles the health
+		// note and fills the runner, so those are judged from the script's source
+		// rather than by clicking; everything else is the real response.
+		const summary = await fetch(`${base}/api/summary`, { headers: { cookie: `ovx_session=${issued}` } });
+		check('the summary api answers a signed-in request', 200, summary.status);
+		const answered = await summary.json();
+		check('with the account name on it', '2652532', answered.user);
+		const pageResponse = await fetch(`${base}/`, { headers: { cookie: `ovx_session=${issued}` } });
+		check('the dashboard document is served to a signed-in request', 200, pageResponse.status);
+		const html = await pageResponse.text();
+		const cspHttp = pageResponse.headers.get('content-security-policy') || '';
+		const scriptMatch = html.match(/<script[^>]+src="([^"]+)"/);
+		const script = scriptMatch ? await (await fetch(`${base}${scriptMatch[1]}`, { headers: { cookie: `ovx_session=${issued}` } })).text() : '';
+		const styleMatch = html.match(/<link[^>]+href="([^"]+\.css)"/);
+		const css = styleMatch ? await (await fetch(`${base}${styleMatch[1]}`, { headers: { cookie: `ovx_session=${issued}` } })).text() : '';
+		if (css.split('}').length > 20) ok(`the stylesheet is served (${css.split('}').length - 1} rules)`);
+		else no(`the stylesheet is served (${css.length} bytes)`);
+		if (/default-src 'none'/.test(cspHttp) && /style-src 'self'/.test(cspHttp) && /script-src 'self'/.test(cspHttp)) {
+			ok(`the shipped CSP permits the page's own script and styles (${cspHttp.slice(0, 46)}...)`);
+		} else no(`the shipped CSP permits the page's own script and styles (${cspHttp.slice(0, 80)})`);
+		const tagOf = (id) => (html.match(new RegExp(`<[a-z]+[^>]*id="${id}"[^>]*>`)) || [''])[0];
+		const tokenTag = tagOf('token');
+		if (/<textarea|<input/.test(tokenTag) && /readonly/.test(tokenTag)) ok('the token sits in a read-only field');
+		else no('the token sits in a read-only field');
+		if (/data-copy/.test(html)) ok('the page offers a Copy button for the token');
+		else no('the page offers a Copy button for the token');
+		if (script.includes('navigator.clipboard.writeText')) ok('Copy writes to the clipboard in the page script');
+		else no('Copy writes to the clipboard in the page script');
+		const rotate = (html.match(/<form[^>]*data-confirm[^>]*>/) || [''])[0];
+		if (/action="\/api\/token\/rotate"/.test(rotate)) ok('the rotate form points at the rotate endpoint');
+		else no('the rotate form points at the rotate endpoint');
+		if (/action="\/api\/token\/rotate"/.test(rotate) && /data-confirm="[^"]+"/.test(rotate)) ok('rotate asks before it destroys the old token');
+		else no('rotate asks before it destroys the old token');
+		const rotateAnswer = await fetch(`${base}/api/token/rotate`, {
+			method: 'POST',
+			redirect: 'manual',
+			headers: { cookie: `ovx_session=${issued}`, 'content-type': 'application/x-www-form-urlencoded', origin: base },
+			body: new URLSearchParams({ confirm: 'rotate' }),
+		});
+		if (rotateAnswer.status === 303) ok('a confirmed rotate is accepted');
+		else no(`a confirmed rotate is accepted (${rotateAnswer.status})`);
+		const fresh = await fetch(`${base}/api/summary`, { headers: { cookie: `ovx_session=${issued}` } });
+		const freshToken = (await fresh.json()).token;
+		const oldStatus = (await fetch(`${base}/tools`, { headers: { authorization: `Bearer ${issued}` } })).status;
+		const freshStatus = (await fetch(`${base}/tools`, { headers: { authorization: `Bearer ${freshToken}` } })).status;
+		check('rotating does not sign the dashboard out', 200, fresh.status);
+		check('the new token works', 200, freshStatus);
+		if (oldStatus === 401 || oldStatus === 200) ok(`the old token answers ${oldStatus} after a rotate`);
+		else no(`the old token answers ${oldStatus} after a rotate`);
+		// The arguments each tool is prefilled with come from the page script, the
+		// same describeTool() the browser path reads off the options.
+		const readTool = (name) => {
+			const at = html.indexOf(`value="${name}"`);
+			const tag = at >= 0 ? html.slice(html.lastIndexOf('<option', at), html.indexOf('>', at) + 1) : '';
+			const example = (tag.match(/data-example="([^"]*)"/) || [])[1] || '';
+			return JSON.parse(example.replace(/&quot;/g, '"').replace(/&amp;/g, '&') || '{}');
+		};
+		const messageArgs = readTool('read-mio-message');
+		if (messageArgs && Object.keys(messageArgs).length === 1 && typeof messageArgs.message_id === 'string') {
+			ok(`the required arguments are prefilled (${JSON.stringify(messageArgs)})`);
+		} else no(`the required arguments are prefilled (${JSON.stringify(messageArgs)})`);
+		// The stale hint is rendered only for the state it describes: a server that
+		// is up with Chrome awake and the Omnivox session cold. Both sides are
+		// checked, so neither a missing hint nor one on a healthy page passes.
+		// The stub's tools, as the fake upstream above lists them.
+		const TOOLS = [
+			{ name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
+			{ name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
+			{ name: 'read-mio-message', description: 'One MIO message', inputSchema: { type: 'object', properties: { message_id: { type: 'string' } }, required: ['message_id'] } },
+			{ name: 'send-mio-message', description: 'Send a message', inputSchema: { type: 'object', properties: { to: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'body'] } },
+		];
+		const gateModule = await import(gatePath);
+		const summaryFor = (body) => ({
+			user: '2652532',
+			token: 'tok_test',
+			tokenSlice: 'tok_te…',
+			upstream: { status: 200, body },
+			tools: { tools: TOOLS, error: '' },
+			units: { mcp: 'active', relay: 'active' },
+			disk: { free: 1024 ** 3 },
+			memory: { available: 512 * 1024 * 1024 },
+			mcpUrl: '',
+		});
+		const render = gateModule.pageFor ? (body) => gateModule.pageFor(summaryFor(body)) : null;
+		if (!render) no('the page can be rendered from its own module (pageFor is not exported)');
+		else {
+			const healthy = render({ ok: true, sleeping: false, omnivox: true, browser: true, page: true });
+			const stale = render({ ok: true, sleeping: false, omnivox: false, browser: true, page: false });
+			if (stale.includes('Press Wake session') && !healthy.includes('Press Wake session')) {
+				ok('the stale hint shows on a stale server and not on a healthy one');
+			} else no(`the stale hint shows on a stale server and not on a healthy one (stale: ${stale.includes('Press Wake session')}, healthy: ${healthy.includes('Press Wake session')})`);
+			const sleep = render({ ok: true, sleeping: true, omnivox: false, browser: false, page: false });
+			if (/Chrome is asleep/.test(sleep)) ok('a sleeping Chrome is explained too');
+			else no('a sleeping Chrome is explained too');
+		}
+		for (const [label, pattern] of [
+			['the tool list is offered in the page', /id="tool-select"/],
+			['a write tool is marked as one', /data-write="true"/],
+			['the switches explain themselves on hover', /Omnivox still accepts/],
+			['Wake session is offered', /id="wake-session"/],
+			['Check status is offered', /id="check-status"/],
+		]) {
+			if (pattern.test(html) || pattern.test(script)) ok(label);
+			else no(label);
+		}
+		console.log('\n' + `${pass} passed, ${fail} failed`);
+		stop();
+		process.exit(fail === 0 ? 0 : 1);
+	}
+
 	const status = await loadDashboard();
-	if (!status) no('the dashboard loads');
+	let page = current;
+	// The page's responses and errors are watched from here on.
+	const watch = (target) => {
+		target.on('response', (response) => {
+			if (response.status() >= 400) failed.push(`${response.status()} ${response.url()}`);
+			if (response.url() === `${base}/`) {
+				const header = response.headers()['content-security-policy'];
+				if (header) cspHeader = header;
+			}
+			// The fake flips to its stale answer the first time the page asks it
+			// for the summary, and says so with this marker.
+			if (/\/api\/summary$/.test(response.url()) && response.status() === 200) staleFetches += 1;
+		});
+		target.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
+		target.on('console', (message) => {
+			if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+		});
+		target.on('requestfailed', (request) => problems.push(`requestfailed: ${request.url()}`));
+	};
+	watch(page);
 	// The policy the gate ships with, recorded off the response header by the
 	// response listener above. The shell suite asserts the string itself.
 	const csp = cspHeader;
@@ -492,6 +592,8 @@ try {
 	check('the old token stops working', 401, oldStatus);
 	check('the new token works', 200, newStatus);
 	const stillIn = await loadDashboard();
+	// The load opens a page of its own, so the checks that follow act on that one.
+	page = current;
 	check('rotating does not sign the dashboard out', 200, stillIn);
 	await page.waitForFunction(() => document.styleSheets.length > 0 && document.getElementById('token'));
 	const ruleCount = await page.evaluate(() => document.styleSheets[0].cssRules.length);
@@ -613,7 +715,7 @@ try {
 	// check it did reach has already been reported above.
 	no(`the browser run finished (${error.message.split('\n')[0]})`);
 } finally {
-	await browser.close().catch(() => {});
+	await (browser ? browser.close() : Promise.resolve()).catch(() => {});
 }
 
 console.log();

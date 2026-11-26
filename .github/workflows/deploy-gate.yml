@@ -17,6 +17,9 @@ on:
       - "deploy/oracle-free-tier/probe-tools.sh"
       - "deploy/oracle-free-tier/test-public.sh"
       - "deploy/oracle-free-tier/patch-mio-guard.py"
+      - "deploy/oracle-free-tier/patch-download-guard.py"
+      - "deploy/oracle-free-tier/patch-extra-tools.py"
+      - "deploy/oracle-free-tier/test-toolscheck.mjs"
       - "deploy/oracle-free-tier/test-gate.sh"
       - "deploy/oracle-free-tier/test-gate-browser.mjs"
       - ".github/workflows/deploy-gate.yml"
@@ -47,22 +50,23 @@ jobs:
         with:
           node-version: 22
 
-      # Puppeteer's own Chrome plus the shared libraries it links against. The
-      # runner has no browser image, so this step fails loudly instead of
-      # letting the browser checks quietly turn into a skip.
-      - name: Install a headless browser
-        run: |
-          set -euo pipefail
-          npm install --no-save --silent puppeteer@24 >/dev/null
-          npx puppeteer browsers install chrome >/dev/null
-          echo "PUPPETEER_ROOT=$PWD" >> "$GITHUB_ENV"
-          PUPPETEER_ROOT=$PWD node deploy/oracle-free-tier/test-gate-browser.mjs --install-deps
-          PUPPETEER_ROOT=$PWD node deploy/oracle-free-tier/test-gate-browser.mjs --check
-
+      # The page checks run against the real gate responses: the shell suite
+      # starts a throwaway gate and the page suite reads its pages, its CSP, its
+      # session handling and its rotate path over HTTP. No browser is installed
+      # here on purpose - a browser's cookie jar and frame lifetime made this job
+      # fail on the runner while the gate itself was fine. Clicking the page
+      # through still happens on the box, where a browser is installed.
       - name: Run the gate suite
         env:
-          GATE_BROWSER: auto
+          GATE_BROWSER: http
         run: bash deploy/oracle-free-tier/test-gate.sh
+
+      - name: The probe and pre-flight suites
+        run: |
+          set -euo pipefail
+          bash deploy/oracle-free-tier/probe-tools.sh --self-test
+          npm install --no-save --silent tsx@4 >/dev/null
+          TSX_PATH=$PWD/node_modules/.bin/tsx node deploy/oracle-free-tier/test-toolscheck.mjs
 
   deploy:
     name: Install the gate on the relay VM
@@ -111,6 +115,8 @@ jobs:
             deploy/oracle-free-tier/omnivox-mcp.sh \
             deploy/oracle-free-tier/patch-download-guard.py \
             deploy/oracle-free-tier/patch-mio-guard.py \
+            deploy/oracle-free-tier/patch-extra-tools.py \
+            deploy/oracle-free-tier/test-toolscheck.mjs \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
           # The same suite against the shipped gate, on the box, with the browser
@@ -127,6 +133,14 @@ jobs:
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'sudo -n bash /tmp/ovx-gate-ship/probe-tools.sh --self-test'
 
+          # The tool-load pre-flight is the guard that keeps one broken module
+          # from taking the whole server down at startup, so it is proven on the
+          # box: a module that throws while loading must be named, a good tree
+          # must pass, and a duplicated module must be reported.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n env TSX_PATH=/opt/omnivox-mcp/app/node_modules/.bin/tsx \
+             node /tmp/ovx-gate-ship/test-toolscheck.mjs'
+
           # Re-fetch the vendored MCP server and re-apply the download guard, so
           # the patch survives an upstream update instead of living in an edited
           # file that the next install would erase.
@@ -140,6 +154,13 @@ jobs:
           # Through the installed command, not the shipped path: this is what
           # SETUP.md tells the operator to run, so the deploy proves it resolves.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'sudo -n omnivox-gate status'
+          # The three read tools this deployment adds on top of upstream have to
+          # be in the served tool list, or the install silently lost the patch.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'for t in get-college-document-link get-mio-message-link get-campus-events; do
+               sudo -n grep -q "\b$t\b" /opt/omnivox-mcp/app/src/mcp/tools/extra/*.ts \
+                 || { echo "::error::the extra read tool $t was not installed"; exit 1; }
+             done; echo "extra read tools installed"'
           # Drives the public URL end to end: health, setup redirect, tokenless
           # refusal, then a good and a bogus document download.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \

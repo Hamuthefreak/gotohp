@@ -413,7 +413,12 @@ try {
 
 	// The state the owner reported: after a restart Chrome is awake but its page
 	// is signed out, and the page said nothing about what to do.
-	await page.goto(`http://127.0.0.1:${gatePort}/stale`, { waitUntil: 'domcontentloaded' });
+	// Throw the switch with the page's own fetch, then reload: going to /stale
+	// as a document would take the page off the gate's origin.
+	await page.evaluate(() => fetch('/stale', { redirect: 'manual' }).then((response) => response.text()).catch(() => {}));
+	await waitFor(`${base}/`);
+	const status = await page.reload({ waitUntil: 'domcontentloaded' });
+	check('the stale page answers 200 instead of redirecting', 200, status?.status());
 	const staleNow = await chips();
 	check('a restarted server reads as Chrome awake and omnivox no', 'no', staleNow.omnivox);
 	check('with Chrome still awake', 'awake', staleNow.chrome);

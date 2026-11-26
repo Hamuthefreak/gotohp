@@ -526,6 +526,7 @@ try {
 	// The policy the gate ships with, recorded off the response header by the
 	// response listener above. The shell suite asserts the string itself.
 	const csp = cspHeader;
+
 	// The stylesheet, the script and the styles have to arrive: anything the
 	// policy refuses is reported here as a violation.
 	await page.waitForFunction(() => document.styleSheets.length > 0 && document.getElementById('token'));
@@ -561,14 +562,47 @@ try {
 
 	// Copy: the button has to reach the clipboard and say that it did.
 	const tokenBefore = await page.$eval('#token', (el) => el.value);
-	await page.evaluate(() => navigator.clipboard.writeText(''));
+	// The button itself is clicked while the clipboard holds none of the token,
+	// so "the clipboard changed" and "the clipboard holds exactly the token" are
+	// both meaningful. If this Chrome cannot grant the read, the checks below
+	// say they were skipped instead of counting a pass they did not earn.
+	const cleared = await page.evaluate(() => navigator.clipboard.writeText('').then(() => true, () => false));
 	await page.click('button[data-copy]');
 	await page.waitForFunction(() => document.querySelector('button[data-copy]').textContent.trim() === 'Copied', { timeout: 5000 }).catch(() => {});
 	const label = await page.$eval('button[data-copy]', (el) => el.textContent.trim());
-	const clipboard = await page.evaluate(() => navigator.clipboard.readText());
 	check('Copy says it copied', 'Copied', label);
-	if (clipboard && clipboard === tokenBefore) ok(`Copy put the token on the clipboard (${clipboard.slice(0, 6)}...)`);
-	else no(`Copy put the token on the clipboard (clipboard held "${clipboard.slice(0, 12)}")`);
+	// Chrome answers the read with a prompt the headless page cannot show, so the
+	// contents are only checked where this Chrome allows a read; elsewhere the
+	// button's own write is proven below, with the clipboard API pinned to a
+	// recorder, so "Copied" can never stand in for a write that did not happen.
+	if (cleared) {
+		const clipboard = await page.evaluate(() => navigator.clipboard.readText().catch((error) => `refused: ${error.message}`));
+		if (clipboard === tokenBefore) ok(`Copy put the token on the clipboard (${clipboard.slice(0, 6)}...)`);
+		else no(`Copy put the token on the clipboard (clipboard held "${String(clipboard).slice(0, 40)}")`);
+	} else {
+		console.log('  note this Chrome refuses a clipboard read here, so the contents are checked with a recorder instead');
+	}
+	// Pin the clipboard to a recorder and click again: the page script has to
+	// hand it exactly the field's value. This runs on any Chrome and is what
+	// stops "Copied" from passing on a button that only relabels itself.
+	const recorded = await page.evaluate(async (target) => {
+		const seen = [];
+		const pin = (value) => Object.defineProperty(navigator, 'clipboard', {
+			configurable: true,
+			value: {
+				writeText: async (text) => { seen.push(text); },
+				write: async () => { seen.push(null); },
+			},
+		});
+		pin(target);
+		document.querySelector('button[data-copy]').click();
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const value = seen.length === 1 && seen[0];
+		delete navigator.clipboard;
+		return value;
+	});
+	if (recorded === tokenBefore) ok(`Copy hands the field's value to the clipboard (${recorded.length} characters)`);
+	else no(`Copy hands the field's value to the clipboard (the page wrote ${JSON.stringify(recorded).slice(0, 40)})`);
 	await page.waitForFunction(() => document.querySelector('button[data-copy]').textContent.trim() === 'Copy', { timeout: 4000 }).catch(() => {
 		no('the Copy label returns to Copy');
 	});

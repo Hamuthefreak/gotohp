@@ -92,9 +92,10 @@ if (mode === 'install') {
 		process.exit(2);
 	}
 	// Puppeteer knows which shared libraries its Chrome links against, and on a
-	// Debian-like host it can install them itself.
+	// Debian-like host it can install them itself - but only as root.
+	const sudo = process.getuid && process.getuid() === 0 ? 'npx' : 'sudo -n npx';
 	try {
-		execFileSync('npx', ['puppeteer', 'browsers', 'install', 'chrome', '--install-deps'], {
+		execFileSync('bash', ['-c', `${sudo} puppeteer browsers install chrome --install-deps`], {
 			cwd: process.env.PUPPETEER_ROOT || here,
 			stdio: 'inherit',
 		});
@@ -282,9 +283,15 @@ try {
 
 	// Rotate: a real submit through the form, answering the confirmation the way
 	// a person would. This is the throwaway gate's token, not the live one.
+	// networkidle0 never settles on this page, so follow the navigation's
+	// response instead of guessing when its last request went quiet.
 	page.on('dialog', (dialog) => dialog.accept());
-	await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('form[data-confirm] button[type="submit"]')]);
-	await page.waitForFunction(() => document.getElementById('token'));
+	const [rotated] = await Promise.all([
+		page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
+		page.click('form[data-confirm] button[type="submit"]'),
+	]);
+	check('the Rotate form is accepted', 200, rotated && rotated.status());
+	await page.waitForFunction(() => document.getElementById('token'), { timeout: 5000 });
 	const tokenAfter = await page.$eval('#token', (el) => el.value);
 	if (tokenAfter && tokenAfter !== tokenBefore) ok(`Rotate issued a new token (${tokenAfter.slice(0, 6)}...)`);
 	else no('Rotate issued a new token');
@@ -292,7 +299,7 @@ try {
 	const newStatus = (await fetch(`${base}/tools`, { headers: { authorization: `Bearer ${tokenAfter}` } })).status;
 	check('the old token stops working', 401, oldStatus);
 	check('the new token works', 200, newStatus);
-	const stillIn = await page.goto(`${base}/`, { waitUntil: 'networkidle0' });
+	const stillIn = await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
 	check('rotating does not sign the dashboard out', 200, stillIn.status());
 
 	// A policy that blocked the page would show up either as a violation or as

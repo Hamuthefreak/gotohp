@@ -222,6 +222,10 @@ try {
 	await page.setViewport({ width: 1100, height: 900 });
 	await browser.defaultBrowserContext().overridePermissions(base, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
 	const problems = [];
+	// Every request the page itself makes, so a failure the test causes from
+	// outside the page can be told apart from one the page causes.
+	const pageRequests = [];
+	page.on('request', (request) => pageRequests.push(request.url()));
 	page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
 	page.on('console', (message) => {
 		if (message.type() === 'error') problems.push(`console: ${message.text()}`);
@@ -311,7 +315,15 @@ try {
 	const violations = problems.filter((line) => /Content Security Policy|refused to|CSP/i.test(line));
 	if (csp && violations.length === 0) ok(`the shipped CSP permits the page (${csp.slice(0, 46)}...)`);
 	else no(`the shipped CSP permits the page (violations: ${violations.slice(0, 2).join(' | ') || 'none recorded'}, policy: ${csp.slice(0, 40) || 'missing'})`);
-	const other = problems.filter((line) => !violations.includes(line) && !/favicon/i.test(line));
+	// The test itself asks /tools with the rotated-away token over plain fetch to
+	// prove it is dead; Chrome logs that 401 like any other failed resource. The
+	// requests the page makes are not fetch, so the page's own errors still fail.
+	const other = problems.filter(
+		(line) =>
+			!violations.includes(line) &&
+			!/favicon/i.test(line) &&
+			!(/\(Unauthorized\)/.test(line) && pageRequests.some((url) => url.endsWith('/tools'))),
+	);
 	if (other.length === 0) ok('the page logs no errors while loading and clicking');
 	else no(`the page logs no errors while loading and clicking (${other.slice(0, 3).join(' | ')})`);
 } catch (error) {

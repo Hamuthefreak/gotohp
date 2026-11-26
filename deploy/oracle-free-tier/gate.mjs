@@ -210,6 +210,12 @@ function html(res, status, markup) {
 	send(res, status, markup, { 'Content-Type': 'text/html; charset=utf-8' });
 }
 
+// An inline icon keeps the browser from asking for /favicon.ico, which would
+// otherwise fall through to the MCP proxy and come back a 401.
+const ICON = `<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(
+	'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#3ddc97"/></svg>',
+)}">`;
+
 function readBody(req) {
 	return new Promise((resolve, reject) => {
 		let size = 0;
@@ -486,7 +492,7 @@ function layout(title, body, script = '') {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>${title}</title><link rel="stylesheet" href="/assets/app.css"></head><body><main>${body}</main>${
+<title>${title}</title><link rel="stylesheet" href="/assets/app.css">${ICON}</head><body><main>${body}</main>${
 		script ? `<script src="${script}" defer></script>` : ''
 	}</body></html>`;
 }

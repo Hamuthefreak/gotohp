@@ -181,6 +181,9 @@ doc=$(curl -s -D "$tmp/doc.head" -b "$tmp/jar4" -c "$tmp/jar4" "$base/")
 check 'the signed-in dashboard answers 200 here' 200 "$(grep -m1 '^HTTP' "$tmp/doc.head" | awk '{print $2}')"
 contains 'the dashboard links its stylesheet' 'href="/assets/app.css"' "$doc"
 contains 'the dashboard loads its script' 'src="/assets/setup.js"' "$doc"
+# Without an icon of its own the browser asks the proxy for /favicon.ico and
+# gets its 401, so every page view logs a failed request.
+contains 'the dashboard carries its own icon' 'rel="icon"' "$doc"
 # A style attribute counts: 'style-src self' refuses it exactly as it refuses
 # a <style> block, and the browser console is where that showed up first.
 if grep -qiE '<script[^>]*>[^<[:space:]]|<style|<[^>]+ on[a-z]+=|<[^>]+ style=' <<<"$doc"; then

@@ -323,7 +323,6 @@ try {
 	const other = problems.filter(
 		(line) =>
 			!violations.includes(line) &&
-			!/favicon/i.test(line) &&
 			!(/Failed to load resource/.test(line) && onlyTheTestsToolsRefusal),
 	);
 	if (other.length === 0) ok('the page logs no errors while loading and clicking');

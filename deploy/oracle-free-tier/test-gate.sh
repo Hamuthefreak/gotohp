@@ -151,7 +151,14 @@ check 'a wrong ?key= is refused' 401 "$(curl -s -o /dev/null -w '%{http_code}' "
 
 echo 'token rotation'
 check 'rotation is accepted' 303 \
-	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar" -X POST "$base/api/token/rotate")"
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar" -X POST "$base/api/token/rotate" -H "Origin: $base")"
+# The page sends Referrer-Policy: no-referrer, so Chrome puts the literal
+# "null" in Origin on every form post. A dashboard button that arrives that way
+# has to work, or nobody can rotate anything from the page.
+check 'a form post with the browser null origin is accepted' 303 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar" -X POST "$base/api/token/rotate" -H 'Origin: null')"
+check 'a cross-origin form post is still refused' 403 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar" -X POST "$base/api/token/rotate" -H 'Origin: https://evil.example')"
 newtok=$(cat "$token_file")
 [[ $newtok != "$tok" ]] && ok 'rotation changes the token' || no 'rotation changes the token'
 check 'the old token stops working' 401 \

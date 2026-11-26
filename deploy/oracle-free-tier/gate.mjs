@@ -243,7 +243,11 @@ async function readForm(req) {
 
 function sameOrigin(req) {
 	const origin = req.headers.origin;
-	if (!origin) return true; // curl and MCP clients send no Origin
+	// curl and MCP clients send no Origin, and a browser form on a no-referrer
+	// page sends the literal "null" for its own origin. Refusing that would
+	// break every button on the dashboard; the session cookie's SameSite and
+	// this host compare still turn away anything another site sends.
+	if (!origin || origin === 'null') return true;
 	try {
 		return new URL(origin).host === req.headers.host;
 	} catch {

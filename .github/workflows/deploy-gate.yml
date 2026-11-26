@@ -92,3 +92,9 @@ jobs:
           # refusal, then a good and a bogus document download.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'sudo -n bash /tmp/ovx-gate-ship/test-public.sh'
+
+          # Every tool against the live account. This runs on the deploy path so
+          # a broken tool fails the deploy, not just an on-demand probe nobody
+          # looks at. Write tools are only called with impossible ids.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n bash /tmp/ovx-gate-ship/probe-tools.sh'

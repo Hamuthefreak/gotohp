@@ -25,9 +25,9 @@ on:
 permissions:
   contents: read
 
-  concurrency:
-    group: deploy-gate
-    cancel-in-progress: false
+concurrency:
+  group: deploy-gate
+  cancel-in-progress: false
 
 jobs:
   # The dashboard only proves itself through the gatekeeper's own suite, and the
@@ -39,20 +39,25 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
           node-version: 22
 
+      # Puppeteer's own Chrome plus the shared libraries it links against. The
+      # runner has no browser image, so this step fails loudly instead of
+      # letting the browser checks quietly turn into a skip.
       - name: Install a headless browser
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq chromium-browser >/dev/null 2>&1 || sudo apt-get install -y -qq chromium >/dev/null
-          npm install --no-save --silent puppeteer-core@24 >/dev/null
-          echo "CHROME_PATH=$(command -v chromium || command -v chromium-browser)" >> "$GITHUB_ENV"
+          npm install --no-save --silent puppeteer@24 >/dev/null
+          npx puppeteer browsers install chrome >/dev/null
           echo "PUPPETEER_ROOT=$PWD" >> "$GITHUB_ENV"
+          PUPPETEER_ROOT=$PWD node deploy/oracle-free-tier/test-gate-browser.mjs --install-deps
+          PUPPETEER_ROOT=$PWD node deploy/oracle-free-tier/test-gate-browser.mjs --check
 
       - name: Run the gate suite
         env:
@@ -65,6 +70,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - name: Prepare SSH
         env:

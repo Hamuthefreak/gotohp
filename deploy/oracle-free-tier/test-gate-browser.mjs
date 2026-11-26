@@ -77,8 +77,33 @@ function loadPuppeteer() {
 	return null;
 }
 
+// --check only says whether a browser and a driver are here; --install-deps
+// installs what Chrome links against, so the caller never invents its own list.
+const mode = process.argv.includes('--check') ? 'check' : process.argv.includes('--install-deps') ? 'install' : 'run';
 const chrome = findChrome();
 const puppeteer = loadPuppeteer();
+if (mode === 'check') {
+	console.log(`chrome: ${chrome || 'none'}, puppeteer: ${puppeteer ? 'yes' : 'no'}`);
+	process.exit(chrome && puppeteer ? 0 : 2);
+}
+if (mode === 'install') {
+	if (!puppeteer) {
+		console.log('install-deps: puppeteer is not installed here');
+		process.exit(2);
+	}
+	// Puppeteer knows which shared libraries its Chrome links against, and on a
+	// Debian-like host it can install them itself.
+	try {
+		execFileSync('npx', ['puppeteer', 'browsers', 'install', 'chrome', '--install-deps'], {
+			cwd: process.env.PUPPETEER_ROOT || here,
+			stdio: 'inherit',
+		});
+		process.exit(0);
+	} catch (error) {
+		console.log(`install-deps: puppeteer could not install them (${error.message.split('\n')[0]})`);
+		process.exit(1);
+	}
+}
 if (!chrome || !puppeteer) {
 	console.log(
 		`skip: no headless browser here (chrome: ${chrome || 'none'}, puppeteer: ${puppeteer ? 'yes' : 'no'})` +

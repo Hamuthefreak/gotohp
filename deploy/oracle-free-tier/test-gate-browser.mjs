@@ -274,7 +274,11 @@ const sessionValue = (() => {
 	const mac = createHmac('sha256', sessionKey).update(payload).digest('base64url');
 	return `${payload}.${mac}`;
 })();
-const sessionCookie = { name: 'ovx_session', value: sessionValue };
+// gate.mjs reads the cookie with cookieValue()/readSession(): base64url with no
+// padding, split on the dots. Node's 'base64url' keeps the '=', which made every
+// signed session unreadable and the dashboard load signed out in CI.
+const sessionValueSafe = sessionValue.replace(/=+$/, '');
+const sessionCookie = { name: 'ovx_session', value: sessionValueSafe };
 if (login.status === 303 && sessionCookie.value) ok('the throwaway gate signs the browser in');
 else no('the throwaway gate signs the browser in');
 

@@ -16,9 +16,10 @@
 #   sudo bash probe-tools.sh --self-test
 #
 # proves the checks bite: it runs this same script against a fake account whose
-# server is broken on purpose three ways - a 200 that is an error page, a
-# non-2xx, and a call that gets no answer - and fails unless each one exits
-# non-zero naming the offending tool. A green probe means nothing otherwise.
+# server is broken on purpose four ways - a 200 that is an error page, a
+# non-2xx, a call that gets no answer, and a write tool that reports success for
+# an impossible id - and fails unless each one exits non-zero naming the
+# offending tool. A green probe means nothing otherwise.
 
 set -uo pipefail
 
@@ -106,6 +107,15 @@ class Fake(BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        if name == 'create-mio-folder' and not args.get('name', '').strip():
+            self.reply(400, 'A folder needs a name: pass the name to create.')
+            return
+        if mode == 'miofalse' and name in ('delete-mio-message', 'restore-mio-message'):
+            # What the server said before the MIO guard: Omnivox accepts the
+            # impossible id, so the tool reports work it did not do.
+            verb = 'moved to trash' if name == 'delete-mio-message' else 'restored'
+            self.reply(200, f'1 message(s) {verb}.')
+            return
         if name == 'get-assignment-submit-link':
             # Mirror a real file-mode deployment: no MCP_SERVER_URL, no link.
             self.reply(500, "get-assignment-submit-link requires HTTP mode with "
@@ -192,6 +202,19 @@ for mode, tool, shape, needle in (
         bad += 1
         why = 'exited 0' if rc == 0 else f'never named {tool} as {needle!r}'
         print(f'self-test  {shape:<33} FAIL: {why}')
+
+# The MIO guard's own regression: a server that echoes Omnivox's false success
+# (200 "1 message(s) moved to trash." for the all-zeros id) must not pass, or
+# the guard could be dropped and every probe would still go green.
+rc, out = run('miofalse')
+named = [line for line in out.splitlines() if 'says nothing moved' in line and 'FAIL' in line]
+if rc != 0 and named:
+    print(f'self-test  {"bogus id reported as success":<33} exit {rc}  names the id  ok')
+    print(f'           probe said: {named[0].strip()}')
+else:
+    bad += 1
+    print(f'self-test  {"bogus id reported as success":<33} FAIL: ' +
+          ('exited 0' if rc == 0 else 'never flagged the false success'))
 
 if bad:
     print(f'\nself-test: {bad} injected failure shape(s) went unreported')
@@ -446,6 +469,10 @@ for name, args in (
 
 # ---------------------------------------------------------------- write tools, never mutated
 print()
+# The MIO guard's regression, before the generic loop so no other scenario can
+# stand in for it: Omnivox accepts a delete or restore for an id that does not
+# exist, so a server without the guard answers 200 "1 message(s) moved to trash."
+# Demand the honest failure - the id named, or the guard saying nothing moved.
 for name, args in (
     ('send-mio-message', {'to': BOGUS_UUID, 'subject': 'probe', 'body': 'probe'}),
     ('reply-mio-message', {'message_id': BOGUS_UUID, 'body': 'probe'}),
@@ -454,11 +481,23 @@ for name, args in (
     ('restore-mio-message', {'message_id': BOGUS_UUID}),
     ('flag-mio-message', {'message_id': BOGUS_UUID, 'flagged': True}),
     ('create-mio-folder', {'name': ''}),
+    ('create-mio-folder', {'name': '   '}),
 ):
     if name not in tools:
         continue
     status, body, _ = call(name, args)
     report(name, status, body, expect_error=True, limit=110)
+    # Omnivox accepts a delete or restore for an id that does not exist and
+    # changes nothing, so a server without the MIO guard answers 200
+    # "1 message(s) moved to trash." to an impossible id. An honest answer says
+    # why: nothing moved, or there is no such message.
+    if name in ('delete-mio-message', 'restore-mio-message'):
+        text = ' '.join(body.split()).lower()
+        if not any(phrase in text for phrase in ('0 message', BOGUS_UUID.lower(), 'no such message')):
+            failures.append((f'{name} (bogus) not honest', status, body[:300]))
+            print(f'{"  " + name + " says nothing moved":<44} {"":<4} <-- FAIL (a bogus id was not reported honestly)')
+        else:
+            print(f'{"  " + name + " says nothing moved":<44} {"":<4} ok (honest failure)')
 
 # ---------------------------------------------------------------- coverage
 print()

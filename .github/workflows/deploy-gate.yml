@@ -16,6 +16,7 @@ on:
       - "deploy/oracle-free-tier/omnivox-mcp.sh"
       - "deploy/oracle-free-tier/probe-tools.sh"
       - "deploy/oracle-free-tier/test-public.sh"
+      - "deploy/oracle-free-tier/patch-mio-guard.py"
       - ".github/workflows/deploy-gate.yml"
   workflow_dispatch:
 
@@ -69,6 +70,7 @@ jobs:
             deploy/oracle-free-tier/test-public.sh \
             deploy/oracle-free-tier/omnivox-mcp.sh \
             deploy/oracle-free-tier/patch-download-guard.py \
+            deploy/oracle-free-tier/patch-mio-guard.py \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
           # The probe is only evidence if it can fail: run its self-test, which
@@ -82,6 +84,7 @@ jobs:
           # file that the next install would erase.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'sudo -n env PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py \
+             MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py \
              bash /tmp/ovx-gate-ship/omnivox-mcp.sh update'
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \

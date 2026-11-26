@@ -192,6 +192,91 @@ python3 ./patch-download-guard.py "$patch_root" >/dev/null 2>&1 || rc=$?
 ((rc != 0)) && ok 'a moved upstream anchor fails loudly' || no 'a moved upstream anchor fails loudly'
 rm -rf "$patch_root"
 
+echo 'upstream MIO guard'
+# Omnivox accepts a delete or restore for an id that does not exist, and a
+# folder with no name, without an error - so `.then(r => !!r)` reported work it
+# never did. The guard proves the effect instead; these checks keep it.
+mio_root=$(mktemp -d)
+mkdir -p "$mio_root/src/omnivox-api/requests"
+cat >"$mio_root/src/omnivox-api/requests/Mio.ts" <<'TS'
+export function GetListeFoldersModel() {
+    return omnivox.postJson<MioFolders.ResponseModel>(
+        '/Mobl/Mio/GetListeFoldersModel',
+        {}
+    );
+}
+
+export function DeleteMessage(messageId: string) {
+    return omnivox.postJson<any>(
+        '/Mobl/Mio/DeleteMessage',
+        {
+            "Id": messageId,
+            "SupprimerPermanent": false,
+            "Envoie": false
+        }
+    ).then(r => !!r);
+}
+
+export function RestoreMessage(messageId: string) {
+    return omnivox.postJson<any>(
+        '/Mobl/Mio/RestoreMessage',
+        {
+            "Id": messageId,
+            "Envoie": false
+        }
+    ).then(r => !!r);
+}
+
+export function AjoutCategorie(nomCategorie: string) {
+    return omnivox.postJson<any>(
+        '/Mobl/Mio/AjoutCategorie',
+        {
+            "nomCategorie": nomCategorie
+        }
+    ).then(r => !!r);
+}
+TS
+out=$(python3 ./patch-mio-guard.py "$mio_root" 2>&1)
+mio_text=$(cat "$mio_root/src/omnivox-api/requests/Mio.ts")
+has 'the delete proves the trash count moved' 'nothing moved' "$mio_text"
+has 'the restore proves it too' 'export async function RestoreMessage' "$mio_text"
+has 'an unnamed folder is refused' "A folder needs a name" "$mio_text"
+has 'an existing folder is refused' 'already exists' "$mio_text"
+has 'a create is proved by the folder list' 'the folder list does not contain it' "$mio_text"
+# grep exits 1 when it finds nothing, which is the good case here.
+left=$(grep -c 'then(r => !!r)' "$mio_root/src/omnivox-api/requests/Mio.ts" || true)
+if [[ $left == 0 ]]; then
+	ok 'no verbatim false success is left in those three'
+else
+	no "no verbatim false success is left (found $left)"
+fi
+has 'all three guards report that they applied' 'create-folder guard: applied' "$out"
+
+out2=$(python3 ./patch-mio-guard.py "$mio_root" 2>&1)
+has 'a second run is a no-op' 'already applied' "$out2"
+count=$(grep -c 'async function movedTrashCount' "$mio_root/src/omnivox-api/requests/Mio.ts")
+((count == 1)) && ok 'the guard is not applied twice' || no "the guard is not applied twice (found $count)"
+
+# The guard has to behave, not just exist: run it against a stub Omnivox.
+if command -v node >/dev/null 2>&1; then
+	guard_out=$(node ./check-mio-guard.mjs "$mio_root" 2>&1)
+	rc=$?
+	if ((rc == 0)); then
+		ok 'a bogus id fails, a real one works, an empty name is refused'
+	else
+		no 'the guard reports only work it can see'
+		printf '%s\n' "$guard_out" | sed 's/^/       /'
+	fi
+else
+	echo '  skip node is not installed here; the deploy self-tests the guard on the box'
+fi
+
+printf 'const x = 1;\n' >"$mio_root/src/omnivox-api/requests/Mio.ts"
+rc=0
+python3 ./patch-mio-guard.py "$mio_root" >/dev/null 2>&1 || rc=$?
+((rc != 0)) && ok 'a moved upstream anchor fails loudly' || no 'a moved upstream anchor fails loudly'
+rm -rf "$mio_root"
+
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

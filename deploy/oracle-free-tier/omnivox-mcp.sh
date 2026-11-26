@@ -31,6 +31,7 @@ PORT=${PORT:-3000}
 REF=${REF:-main}
 REPO=https://github.com/Beat-YT/omnivox-mcp.git
 PATCH_URL=${PATCH_URL:-https://raw.githubusercontent.com/Hamuthefreak/gotohp/main/deploy/oracle-free-tier/patch-download-guard.py}
+MIO_PATCH_URL=${MIO_PATCH_URL:-https://raw.githubusercontent.com/Hamuthefreak/gotohp/main/deploy/oracle-free-tier/patch-mio-guard.py}
 SWAPFILE=${SWAPFILE:-/swapfile}
 SWAP_MB=${SWAP_MB:-2048}
 TZ_NAME=${TZ_NAME:-America/Toronto}
@@ -336,14 +337,20 @@ start_decision() {
 }
 
 apply_upstream_patches() {
-	# See patch-download-guard.py. The checkout is re-fetched on every install, so
-	# the guard has to be re-applied here instead of living in an edited file.
-	say "patching the download guard"
-	local script=${PATCH_SOURCE:-$PREFIX/patches/patch-download-guard.py}
+	# See patch-download-guard.py and patch-mio-guard.py. The checkout is re-fetched
+	# on every install, so each guard has to be re-applied here instead of living
+	# in an edited file.
+	apply_patch 'download guard' "${PATCH_SOURCE:-$PREFIX/patches/patch-download-guard.py}" "$PATCH_URL"
+	apply_patch 'MIO guard' "${MIO_PATCH_SOURCE:-$PREFIX/patches/patch-mio-guard.py}" "$MIO_PATCH_URL"
+}
+
+apply_patch() {
+	local label=$1 script=$2 url=$3
+	say "patching the $label"
 	if [[ ! -s $script ]]; then
 		install -d -m 0755 "$PREFIX/patches"
-		if ! curl -fsSL -H 'Cache-Control: no-cache' "$PATCH_URL" -o "$script"; then
-			warn "could not fetch the download-guard patch"
+		if ! curl -fsSL -H 'Cache-Control: no-cache' "$url" -o "$script"; then
+			warn "could not fetch the $label patch"
 			return 1
 		fi
 		chmod 0644 "$script"

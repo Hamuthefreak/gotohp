@@ -309,6 +309,12 @@ try {
 		if (message.type() === 'error') problems.push(`console: ${message.text()}`);
 	});
 	page.on('requestfailed', (request) => problems.push(`requestfailed: ${request.url()}`));
+	// A 401 on /frozen alone proves nothing about the page: Chrome reports the
+	// console line with no URL, so the suite has to know whether the header it
+	// adds really reached the server.
+	page.on('response', (response) => {
+		if (/\/frozen$/.test(response.url())) answered.push(response.status());
+	});
 
 	// The page has to start signed in, so the suite signs the session itself with
 	// the throwaway gate's own key, exactly as gate.mjs does, and sends it with
@@ -317,6 +323,7 @@ try {
 	// suffix), and the jar in CI held nothing at all. A one-shot fetch() from the
 	// page obeys interception too, unlike page.setExtraHTTPHeaders.
 	const seen = [];
+	const answered = [];
 	await page.setRequestInterception(true);
 	page.on('request', async (request) => {
 		try {
@@ -486,6 +493,7 @@ try {
 	// as a document would take the page off the gate's origin.
 	await page.evaluate(() => fetch('/frozen').then((response) => response.text()).catch(() => {}));
 	await page.reload({ waitUntil: 'domcontentloaded' });
+	console.log(`interception reached: ${seen.slice(-6).join(' ') || 'nothing'} | /frozen answered ${answered.join(', ') || 'nothing'}`);
 	const staleNow = await chips();
 	check('a restarted server reads as Chrome awake and omnivox no', 'no', staleNow.omnivox);
 	check('with Chrome still awake', 'awake', staleNow.chrome);

@@ -581,6 +581,16 @@ form.refresh{margin:0 0 12px}
 // Every interactive bit the page had inline, now a real file so the page can
 // carry a Content-Security-Policy without 'unsafe-inline'.
 const SCRIPT = `
+// What each switch means on hover. The server puts the same words in the page
+// (CAP_TITLES); a test keeps the two in step.
+const CAP_TITLES = {
+  ok: 'The MCP server answered its health check.',
+  browser: 'Chrome has the Omnivox page open.',
+  page: 'That page is fully loaded.',
+  omnivox: 'Omnivox still accepts the saved login.',
+  chrome: 'Chrome runs between requests; it parks after five idle minutes.',
+};
+
 for (const box of document.querySelectorAll('[data-copy]')) {
   box.addEventListener('click', async () => {
     const field = document.getElementById(box.dataset.copy);
@@ -615,10 +625,11 @@ function paintChips(upstream) {
     omnivox: [word(caps.omnivox), tone(caps.omnivox)],
     chrome: !answered ? ['unknown', ''] : sleeping ? ['asleep', 'warn'] : ['awake', 'ok'],
   };
-  for (const key of Object.keys(values)) {
+  	for (const key of Object.keys(values)) {
     for (const node of document.querySelectorAll('[data-cap="' + key + '"]')) {
       node.textContent = values[key][0];
       node.className = values[key][1];
+      node.title = CAP_TITLES[key];
     }
   }
   if (!note) return;
@@ -799,6 +810,15 @@ function setupPage(error = '') {
 	);
 }
 
+// The hover text for each switch, used by the page and by the script above.
+const CAP_TITLES = {
+	ok: 'The MCP server answered its health check.',
+	browser: 'Chrome has the Omnivox page open.',
+	page: 'That page is fully loaded.',
+	omnivox: 'Omnivox still accepts the saved login.',
+	chrome: 'Chrome runs between requests; it parks after five idle minutes.',
+};
+
 // What the switches read right after a health answer. The page repaints them
 // from /api/summary after every tool call, so the same wording lives in SCRIPT.
 function healthNote(upstream) {
@@ -808,6 +828,19 @@ function healthNote(upstream) {
 	return upstream.body?.sleeping === true
 		? 'Health answered 200; Chrome is asleep, so the next request wakes it in about 20 seconds.'
 		: 'Health answered 200; Chrome is awake and the Omnivox session is ready.';
+}
+
+// "Omnivox session no" with Chrome awake is not a login that expired: the server
+// reports omnivox from its saved login and page from the page it has open, and it
+// only notices a login problem when it rebuilds one - a restart, or the first
+// answer after Chrome wakes. So Chrome awake plus omnivox no means a restart left
+// Chrome parked on a sign-in page it never replaced. A light read makes the
+// server open a page again, and whatever is wrong then is in its answer.
+function healthHint(upstream) {
+	if (upstream.status !== 200 || upstream.body?.sleeping === true || upstream.body?.omnivox !== false) return '';
+	return `<div class="banner">Chrome is awake but its page is not signed in, which is what a restart of the MCP server
+      leaves behind. Press <b>Wake session</b> below to make it open a page again; if the switches stay as they are,
+      the Omnivox login itself has expired and needs <code>sudo omnivox-mcp session</code> on the box.</div>`;
 }
 
 // The runner: every registered tool, with the required arguments prefilled so a
@@ -852,7 +885,7 @@ function dashboardPage(summary) {
 	const caps = summary.upstream.body || {};
 	const answered = summary.upstream.status === 200;
 	const chip = (label, key, text, tone) =>
-		`<span class="chip">${label} <b data-cap="${key}" class="${tone}">${text}</b></span>`;
+		`<span class="chip">${label} <b data-cap="${key}" class="${tone}" title="${esc(CAP_TITLES[key])}">${text}</b></span>`;
 	const word = (value) => (!answered ? 'unknown' : value === true ? 'yes' : value === false ? 'no' : 'unknown');
 	const tone = (value) => (!answered ? '' : value === true ? 'ok' : value === false ? 'bad' : '');
 	const sleeping = caps.sleeping === true;
@@ -872,6 +905,7 @@ function dashboardPage(summary) {
         <div><div class="kv">memory free</div><div class="val">${summary.memory ? `${Math.round(summary.memory.available / 1024 / 1024)} MB` : 'n/a'}</div></div>
       </div>
       <p class="muted small note" id="health-note">${healthNote(summary.upstream)}</p>
+      ${healthHint(summary.upstream)}
     </div>
 
     ${runnerCard(summary.tools)}

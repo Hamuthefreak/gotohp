@@ -129,7 +129,8 @@ fs.writeFileSync(keyFile, 'the-omnivox-access-key');
 // the switches in the page change.
 const fakeUpstream = `
 import http from 'node:http';
-const state = { warmed: false };
+// /stale serves a restarted server's leftovers: Chrome awake, omnivox no.
+const state = { warmed: false, stale: false };
 const tools = [
   { name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
   { name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
@@ -143,7 +144,18 @@ http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
+      if (state.stale) {
+        res.end(JSON.stringify({ ok: true, browser: true, page: false, omnivox: false, sleeping: false }));
+        return;
+      }
       res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
+      return;
+    }
+    if (url.pathname === '/stale') {
+      state.stale = true;
+      state.warmed = false;
+      res.writeHead(303, { location: process.argv[3] || '/' });
+      res.end();
       return;
     }
     if (req.method === 'GET' && url.pathname === '/tools') {
@@ -398,6 +410,16 @@ try {
 	await page.click('#check-status');
 	await page.waitForFunction(() => /awake/.test(document.getElementById('tool-meta').textContent), { timeout: 10000 });
 	ok('Check status reports the session awake');
+
+	// The state the owner reported: after a restart Chrome is awake but its page
+	// is signed out, and the page said nothing about what to do.
+	await page.goto(`http://127.0.0.1:${gatePort}/stale`, { waitUntil: 'domcontentloaded' });
+	const staleNow = await chips();
+	check('a restarted server reads as Chrome awake and omnivox no', 'no', staleNow.omnivox);
+	check('with Chrome still awake', 'awake', staleNow.chrome);
+	const title = await page.$eval('[data-cap="omnivox"]', (node) => node.title);
+	if (/Omnivox still accepts/.test(title)) ok('the switches explain themselves on hover');
+	else no(`the switches explain themselves on hover (got "${title}")`);
 
 	// A policy that blocked the page would show up either as a violation or as
 	// an element behaving unlike its own stylesheet. Both fail here.

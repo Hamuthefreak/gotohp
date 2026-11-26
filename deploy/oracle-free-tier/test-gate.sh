@@ -52,7 +52,9 @@ import http from 'node:http';
 // and an echo for the MCP proxy checks. It warms up (browser/page/omnivox true,
 // sleeping false) the first time a tool is called, which is exactly what the
 // real server does when Chrome wakes.
-const state = { warmed: false };
+// The URL the gate is on arrives as argv[3]; /stale then serves a restart's
+// leftovers: Chrome awake, omnivox no, page no.
+const state = { warmed: false, stale: false };
 const tools = [
 	{ name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
 	{ name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
@@ -82,7 +84,26 @@ http
 			const key = req.headers['x-mcp-auth'] || '';
 			if (url.pathname === '/health') {
 				res.writeHead(200, { 'content-type': 'application/json' });
+				if (state.stale) {
+					res.end(JSON.stringify({ ok: true, browser: true, page: false, omnivox: false, sleeping: false }));
+					return;
+				}
 				res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
+				return;
+			}
+			// Two switches the tests can throw: /stale leaves a restart's leftovers
+			// behind, /fresh clears them again.
+			if (url.pathname === '/fresh') {
+				state.stale = false;
+				res.writeHead(204);
+				res.end();
+				return;
+			}
+			if (url.pathname === '/stale') {
+				state.stale = true;
+				state.warmed = false;
+				res.writeHead(303, { location: process.argv[3] || '/' });
+				res.end();
 				return;
 			}
 			if (req.method === 'GET' && url.pathname === '/tools') {
@@ -138,7 +159,7 @@ JS
 printf 'the-omnivox-access-key' >"$tmp/key.txt"
 mkdir -p "$tmp/data"
 
-node "$tmp/upstream.mjs" "$up_port" &
+node "$tmp/upstream.mjs" "$up_port" "http://127.0.0.1:$gate_port" &
 up_pid=$!
 DATA_DIR="$tmp/data" OMNIVOX_KEY_FILE="$tmp/key.txt" PORT="$gate_port" \
 	UPSTREAM="http://127.0.0.1:$up_port" GATE_USERNAME=2652532 \
@@ -300,11 +321,27 @@ contains 'the runner marks the write tools' 'data-write="true"' "$doc"
 contains 'the runner names the required arguments' 'Required: message_id' "$doc"
 contains 'the runner can wake the session in one click' 'id="wake-session"' "$doc"
 contains 'the switches say which value they show' 'data-cap="omnivox"' "$doc"
+contains 'the switches explain themselves on hover' 'title="Omnivox still accepts the saved login."' "$doc"
+# "Omnivox session no" with Chrome awake is what a restarted MCP server leaves
+# behind, and nothing on the page said how to clear it.
+curl -s -o /dev/null "http://127.0.0.1:$up_port/stale"
+stale=$(curl -s -b "$tmp/jar4" "$base/")
+contains 'a stale page after a restart is explained' 'Press <b>Wake session</b>' "$stale"
+contains 'the stale hint points at the real fix' 'sudo omnivox-mcp session' "$stale"
+if grep -q 'Press <b>Wake session</b>' <<<"$doc"; then no 'a healthy page carries no stale hint'; else ok 'a healthy page carries no stale hint'; fi
+# Back to a server that wakes on its first call: the tool checks below need it.
+curl -s -o /dev/null "http://127.0.0.1:$up_port/fresh"
 contains 'the CSP lets the page call itself' "connect-src 'self'" "$csp"
 contains 'the runner posts to its own endpoint' "fetch('/api/tool'" "$js"
 contains 'the runner reads the status back' "fetch('/api/summary'" "$js"
 contains 'the runner prefills the required fields' 'option.dataset.example' "$js"
 contains 'the runner asks before a write tool' 'window.confirm' "$js"
+# The page writes the hover text into every switch, so the script needs the
+# same words the server renders - a missing copy threw inside the handler and
+# left the switches at "unknown" for the rest of the visit.
+for cap in ok browser page omnivox chrome; do
+	contains "the script explains the $cap switch" "  $cap: '" "$js"
+done
 check 'the tool endpoint needs a login' 401 \
 	"$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/tool" -H 'content-type: application/json' -d '{"name":"get-terms","args":{}}')"
 check 'the tool endpoint refuses a cross-origin post' 403 \
@@ -317,6 +354,8 @@ answer=$(curl -s -b "$tmp/jar4" -X POST "$base/api/tool" -H 'content-type: appli
 contains 'a tool call is answered through the dashboard' '# read-mio-message answered with abc-123' "$answer"
 contains 'the answer comes back as a clean result' '"ok":true' "$answer"
 if grep -q 'the-omnivox-access-key' <<<"$answer"; then no 'the tool answer leaks the Omnivox key'; else ok 'the tool answer never shows the Omnivox key'; fi
+# Chrome wakes on the first call, and the switches have to follow it: this is
+# the /api/summary the page fetches after every call.
 contains 'the session turns to yes after the call' '"omnivox":true' "$(curl -s -b "$tmp/jar4" "$base/api/summary")"
 
 # A 200 that is really an error page must not read as a success: the probe

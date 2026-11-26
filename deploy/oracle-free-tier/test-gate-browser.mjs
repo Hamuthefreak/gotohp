@@ -327,7 +327,7 @@ try {
 			!(/Failed to load resource/.test(line) && onlyTheTestsToolsRefusal),
 	);
 	if (other.length === 0) ok('the page logs no errors while loading and clicking');
-	else no(`the page logs no errors while loading and clicking (${other.slice(0, 3).join(' | ')})`);
+	else no(`the page logs no errors while loading and clicking (${other.slice(0, 3).join(' | ')}; failed responses: ${failed.slice(0, 4).join(' | ')})`);
 } catch (error) {
 	no(`the browser run finished (${error.message.split('\n')[0]})`);
 } finally {

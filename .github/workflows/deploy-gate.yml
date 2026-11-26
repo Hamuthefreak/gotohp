@@ -137,8 +137,9 @@ jobs:
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \
              bash /tmp/ovx-gate-ship/omnivox-gate.sh install"
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n bash /tmp/ovx-gate-ship/omnivox-gate.sh status'
+          # Through the installed command, not the shipped path: this is what
+          # SETUP.md tells the operator to run, so the deploy proves it resolves.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'sudo -n omnivox-gate status'
           # Drives the public URL end to end: health, setup redirect, tokenless
           # refusal, then a good and a bogus document download.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \

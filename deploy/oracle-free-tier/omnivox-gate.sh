@@ -29,6 +29,7 @@ REF=${REF:-main}
 RAW="https://raw.githubusercontent.com/Hamuthefreak/gotohp/$REF/deploy/oracle-free-tier"
 GATE_USERNAME=${GATE_USERNAME:-2652532}
 CLOUDFLARED=${CLOUDFLARED:-/usr/local/bin/cloudflared}
+COMMAND=${COMMAND:-/usr/local/bin/omnivox-gate}
 
 say() { printf '\n==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -111,6 +112,21 @@ ensure_cloudflared() {
 		-o "$CLOUDFLARED"
 	chmod 0755 "$CLOUDFLARED"
 	"$CLOUDFLARED" --version
+}
+
+# SETUP.md, the usage text and the first-run banner all tell the operator to run
+# `sudo omnivox-gate ...`. Install this script where a plain shell finds it, or
+# the deploy leaves it in /tmp/ovx-gate-ship and every documented command fails
+# with "command not found".
+install_command() {
+	local src=${BASH_SOURCE[0]:-}
+	if [[ -z $src || ! -f $src ]]; then
+		warn "cannot tell where this script lives; install it as $COMMAND"
+		return 1
+	fi
+	src=$(readlink -f "$src")
+	[[ $src == "$COMMAND" ]] || install -m 0755 "$src" "$COMMAND"
+	echo "$COMMAND"
 }
 
 fetch_gate() {
@@ -245,6 +261,7 @@ do_install() {
 	ensure_user
 	ensure_cloudflared
 	fetch_gate
+	install_command || warn "$COMMAND is not installed; call this script by path"
 
 	say 'units'
 	# Before a password exists, reinstalling mints a fresh setup code: an old one

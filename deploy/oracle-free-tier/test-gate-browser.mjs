@@ -303,6 +303,9 @@ try {
 	page.on('requestfailed', (request) => problems.push(`requestfailed: ${request.url()}`));
 
 	await page.setCookie({ ...sessionCookie, domain: '127.0.0.1', path: '/', httpOnly: true, sameSite: 'Lax' });
+	const kept = await page.cookies();
+	if (kept.some((cookie) => cookie.name === sessionCookie.name)) ok('the browser keeps the session cookie');
+	else no(`the browser keeps the session cookie (${kept.map((cookie) => cookie.name).join(', ') || 'none'})`);
 
 	console.log('in the browser');
 	const response = await page.goto(`${base}/`, { waitUntil: 'networkidle0' });

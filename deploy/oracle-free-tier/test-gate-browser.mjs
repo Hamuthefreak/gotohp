@@ -319,7 +319,9 @@ try {
 	const violations = problems.filter((line) => /Content Security Policy|refused to|CSP/i.test(line));
 	if (csp && violations.length === 0) ok(`the shipped CSP permits the page (${csp.slice(0, 46)}...)`);
 	else no(`the shipped CSP permits the page (violations: ${violations.slice(0, 2).join(' | ') || 'none recorded'}, policy: ${csp.slice(0, 40) || 'missing'})`);
-	const onlyTheTestsToolsRefusal = failed.every((line) => /^401 .*\/tools$/.test(line));
+				// Only a refusal the test itself caused is excused; anything else the
+			// browser got back deserves a look, favicon included.
+			const onlyTheTestsToolsRefusal = failed.every((line) => /^401 .*\/tools$/.test(line));
 	const other = problems.filter(
 		(line) =>
 			!violations.includes(line) &&

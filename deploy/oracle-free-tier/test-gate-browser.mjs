@@ -130,7 +130,8 @@ fs.writeFileSync(keyFile, 'the-omnivox-access-key');
 const fakeUpstream = `
 import http from 'node:http';
 // /stale serves a restarted server's leftovers: Chrome awake, omnivox no.
-const state = { warmed: false, stale: false };
+// /frozen keeps that answer for good, as an expired login would.
+const state = { warmed: false, stale: false, sticky: false };
 const tools = [
   { name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
   { name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
@@ -151,6 +152,13 @@ http.createServer((req, res) => {
       res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
       return;
     }
+    if (url.pathname === '/frozen') {
+      state.stale = true;
+      state.sticky = true;
+      res.writeHead(204);
+      res.end();
+      return;
+    }
     if (url.pathname === '/stale') {
       state.stale = true;
       state.warmed = false;
@@ -164,6 +172,11 @@ http.createServer((req, res) => {
       return;
     }
     if (req.method === 'POST' && url.pathname.startsWith('/tools/')) {
+      if (state.sticky) {
+        res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('the session is signed out, so this page cannot be read');
+        return;
+      }
       state.warmed = true;
       const name = url.pathname.split('/').pop();
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
@@ -400,6 +413,18 @@ try {
 	const noteText = await page.$eval('#health-note', (el) => el.textContent);
 	if (/awake/.test(noteText)) ok('the note under the switches says awake');
 	else no(`the note under the switches says awake (got "${noteText}")`);
+	// The note is repainted from /api/summary after every call, so a call that
+	// wakes the session has to take an earlier restart warning away.
+	await page.evaluate(() => {
+		const el = document.getElementById('health-note');
+		if (el) el.textContent = 'stale';
+	});
+	await page.click('#check-status');
+	await page.waitForFunction(
+		() => !/stale/.test(document.getElementById('health-note')?.textContent || 'stale'),
+		{ timeout: 10000 },
+	);
+	ok('Check status clears a warning the session no longer has');
 
 	await page.evaluate(() => {
 		document.getElementById('tool-result').textContent = '';
@@ -415,16 +440,27 @@ try {
 	// is signed out, and the page said nothing about what to do.
 	// Throw the switch with the page's own fetch, then reload: going to /stale
 	// as a document would take the page off the gate's origin.
-	await page.evaluate(() => fetch('/stale', { redirect: 'manual' }).then((response) => response.text()).catch(() => {}));
-	await waitFor(`${base}/`);
-	const status = await page.reload({ waitUntil: 'domcontentloaded' });
-	check('the stale page answers 200 instead of redirecting', 200, status?.status());
+	await page.evaluate(() => fetch('/frozen').then((response) => response.text()).catch(() => {}));
+	await page.reload({ waitUntil: 'domcontentloaded' });
 	const staleNow = await chips();
 	check('a restarted server reads as Chrome awake and omnivox no', 'no', staleNow.omnivox);
 	check('with Chrome still awake', 'awake', staleNow.chrome);
 	const title = await page.$eval('[data-cap="omnivox"]', (node) => node.title);
 	if (/Omnivox still accepts/.test(title)) ok('the switches explain themselves on hover');
 	else no(`the switches explain themselves on hover (got "${title}")`);
+	const banner = await page.evaluate(() => {
+		const node = [...document.querySelectorAll('.banner')].find((el) => /Press Wake session/.test(el.textContent));
+		return node ? node.textContent.replace(/\s+/g, ' ') : '';
+	});
+	if (banner) ok('the page says how to clear a stale session');
+	else no('the page says how to clear a stale session');
+	await page.click('#wake-session');
+	await page.waitForFunction(() => /get-terms answered/.test(document.getElementById('tool-result').textContent), { timeout: 20000 });
+	const stillOut = await chips();
+	check('a call that stays signed out leaves the switches honest', 'no', stillOut.omnivox);
+	const afterWake = await page.evaluate(() => ((document.querySelector('.banner') || {}).textContent || '').replace(/\s+/g, ' '));
+	if (/Press Wake session/.test(afterWake)) ok('and keeps telling the owner what to do');
+	else no(`and keeps telling the owner what to do (got "${afterWake}")`);
 
 	// A policy that blocked the page would show up either as a violation or as
 	// an element behaving unlike its own stylesheet. Both fail here.

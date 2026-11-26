@@ -54,7 +54,8 @@ import http from 'node:http';
 // real server does when Chrome wakes.
 // The URL the gate is on arrives as argv[3]; /stale then serves a restart's
 // leftovers: Chrome awake, omnivox no, page no.
-const state = { warmed: false, stale: false };
+// /frozen keeps that answer for good, as an expired login would.
+const state = { warmed: false, stale: false, sticky: false };
 const tools = [
 	{ name: 'get-courses-summary', description: 'Your courses for a term', inputSchema: { type: 'object', properties: {} } },
 	{ name: 'get-terms', description: 'Terms on the account', inputSchema: { type: 'object', properties: {} } },
@@ -91,10 +92,18 @@ http
 				res.end(JSON.stringify({ ok: true, browser: state.warmed, page: state.warmed, omnivox: state.warmed, sleeping: !state.warmed }));
 				return;
 			}
-			// Two switches the tests can throw: /stale leaves a restart's leftovers
-			// behind, /fresh clears them again.
+			// Switches the tests throw: /stale leaves a restart's leftovers behind,
+			// /fresh clears them, /frozen keeps them on every route.
+			if (url.pathname === '/frozen') {
+				state.stale = true;
+				state.sticky = true;
+				res.writeHead(204);
+				res.end();
+				return;
+			}
 			if (url.pathname === '/fresh') {
 				state.stale = false;
+				state.sticky = false;
 				res.writeHead(204);
 				res.end();
 				return;
@@ -120,6 +129,11 @@ http
 				if (key !== KEY) {
 					res.writeHead(401, { 'content-type': 'application/json' });
 					res.end('{"error":"no key"}');
+					return;
+				}
+				if (state.sticky) {
+					res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+					res.end("the session is signed out, so this page cannot be read\n(Omnivox answered with its login form)");
 					return;
 				}
 				state.warmed = true;
@@ -324,11 +338,11 @@ contains 'the switches say which value they show' 'data-cap="omnivox"' "$doc"
 contains 'the switches explain themselves on hover' 'title="Omnivox still accepts the saved login."' "$doc"
 # "Omnivox session no" with Chrome awake is what a restarted MCP server leaves
 # behind, and nothing on the page said how to clear it.
+if grep -q 'Press Wake session below' <<<"$doc"; then no 'a healthy page carries no stale hint'; else ok 'a healthy page carries no stale hint'; fi
 curl -s -o /dev/null "http://127.0.0.1:$up_port/stale"
 stale=$(curl -s -b "$tmp/jar4" "$base/")
-contains 'a stale page after a restart is explained' 'Press <b>Wake session</b>' "$stale"
-contains 'the stale hint points at the real fix' 'sudo omnivox-mcp session' "$stale"
-if grep -q 'Press <b>Wake session</b>' <<<"$doc"; then no 'a healthy page carries no stale hint'; else ok 'a healthy page carries no stale hint'; fi
+contains 'a stale page after a restart is explained' 'Press Wake session below' "$stale"
+contains 'the stale hint also names the page itself' 'Chrome is awake but its page is not signed in' "$stale"
 # Back to a server that wakes on its first call: the tool checks below need it.
 curl -s -o /dev/null "http://127.0.0.1:$up_port/fresh"
 contains 'the CSP lets the page call itself' "connect-src 'self'" "$csp"

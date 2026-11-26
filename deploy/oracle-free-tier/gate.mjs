@@ -578,6 +578,13 @@ form.refresh{margin:0 0 12px}
 .banner{border:1px solid #3a2b18;background:#1d1608;color:var(--warn);padding:10px 12px;border-radius:10px;font-size:13px;margin-bottom:16px}
 `;
 
+// Server and page both use this wording for the one state a restart leaves
+// behind. It sits outside SCRIPT because that string is JavaScript the browser
+// runs, not markup the page renders.
+const STALE_HINT =
+	'Chrome is awake but its page is not signed in, which is what a restart of the MCP server leaves behind. ' +
+	'Press Wake session below to make it open a page again; if the switches stay as they are, the Omnivox login itself has expired.';
+
 // Every interactive bit the page had inline, now a real file so the page can
 // carry a Content-Security-Policy without 'unsafe-inline'.
 const SCRIPT = `
@@ -589,6 +596,9 @@ const CAP_TITLES = {
   page: 'That page is fully loaded.',
   omnivox: 'Omnivox still accepts the saved login.',
   chrome: 'Chrome runs between requests; it parks after five idle minutes.',
+};
+const STALE_HINT = ${
+  JSON.stringify(STALE_HINT)
 };
 
 for (const box of document.querySelectorAll('[data-copy]')) {
@@ -633,7 +643,9 @@ function paintChips(upstream) {
     }
   }
   if (!note) return;
-  if (!answered) {
+  if (answered && !sleeping && caps.omnivox === false) {
+    note.textContent = STALE_HINT;
+  } else if (!answered) {
     note.textContent = 'The MCP server did not answer the health check (HTTP ' + ((upstream && upstream.status) || 'no answer') + ').';
   } else if (sleeping) {
     note.textContent = 'Health answered 200; Chrome is asleep, so the next request wakes it in about 20 seconds.';
@@ -838,9 +850,7 @@ function healthNote(upstream) {
 // server open a page again, and whatever is wrong then is in its answer.
 function healthHint(upstream) {
 	if (upstream.status !== 200 || upstream.body?.sleeping === true || upstream.body?.omnivox !== false) return '';
-	return `<div class="banner">Chrome is awake but its page is not signed in, which is what a restart of the MCP server
-      leaves behind. Press <b>Wake session</b> below to make it open a page again; if the switches stay as they are,
-      the Omnivox login itself has expired and needs <code>sudo omnivox-mcp session</code> on the box.</div>`;
+	return `<div class="banner">${esc(STALE_HINT)}</div>`;
 }
 
 // The runner: every registered tool, with the required arguments prefilled so a

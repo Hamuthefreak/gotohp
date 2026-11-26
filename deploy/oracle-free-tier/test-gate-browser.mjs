@@ -144,6 +144,15 @@ http.createServer((req, res) => {
   req.on('data', (c) => (raw += c));
   req.on('end', () => {
     const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname === '/api/summary') {
+      // The page only ever asks the fake through the gate's proxy. A health
+      // answer here is what the stale state the owner reported looks like:
+      // Chrome awake, the page and the Omnivox login no.
+      state.stale = true;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ stale: true }));
+      return;
+    }
     if (url.pathname === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
       if (state.stale) {
@@ -296,6 +305,9 @@ const browser = await puppeteer.launch({
 });
 
 try {
+	// A page of its own: the API calls above (setup, login, cookies) go through the
+	// browser's default context, and a navigation on a page that context has
+	// touched comes back detached.
 	const page = await browser.newPage();
 	await page.setViewport({ width: 1100, height: 900 });
 	await browser.defaultBrowserContext().overridePermissions(base, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
@@ -305,8 +317,15 @@ try {
 	// test earns on /tools checking a dead token can then be told from a
 	// failure the page really caused.
 	const failed = [];
+	let cspHeader = '';
 	page.on('response', (response) => {
 		if (response.status() >= 400) failed.push(`${response.status()} ${response.url()}`);
+		if (response.url() === `${base}/` && response.headers()['content-security-policy']) {
+			cspHeader = response.headers()['content-security-policy'];
+		}
+		// The fake flips to its stale answer the first time the page asks it for
+		// the summary, and says so with this marker.
+		if (/\/api\/summary$/.test(response.url()) && response.status() === 200) staleFetches += 1;
 	});
 	page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
 	page.on('console', (message) => {
@@ -316,45 +335,97 @@ try {
 	// A 401 on /frozen alone proves nothing about the page: Chrome reports the
 	// console line with no URL, so the suite has to know whether the header it
 	// adds really reached the server.
-	page.on('response', (response) => {
-		if (/\/frozen$/.test(response.url())) answered.push(response.status());
-	});
 
-	// The page has to start signed in, so the suite signs the session itself with
-	// the throwaway gate's own key, exactly as gate.mjs does, and sends it with
-	// every request to the gate. A cookie is not an option: Chrome's jar refuses
-	// one for this bare http origin (it reads it as third-party without a public
-	// suffix), and the jar in CI held nothing at all. A one-shot fetch() from the
-	// page obeys interception too, unlike page.setExtraHTTPHeaders.
+	// The session for this page comes from the gate's own POST /login, exactly as
+	// the owner's does: Chrome refuses a cookie for a bare IP origin when it is
+	// set outside a real response, and the page's CSP rules out document.cookie.
+	// The handler below answers only this page's requests, and it answers them
+	// from the gate: a stubbed page (respond()) is not same-origin with the gate
+	// for Chrome, so a cookie it sets is thrown away as third-party.
 	const seen = [];
-	const answered = [];
 	await page.setRequestInterception(true);
-	page.on('request', async (request) => {
-		try {
-			if (!request.url().startsWith(`${base}/`) || request.isInterceptResolutionHandled?.()) {
-				await request.continue();
-				return;
-			}
-			const headers = { ...request.headers() };
-			const jar = headers.cookie ? `${headers.cookie}; ` : '';
-			headers.cookie = `${jar}${sessionCookie.name}=${sessionCookie.value}`;
-			seen.push(new URL(request.url()).pathname);
-			await request.continue({ headers });
-		} catch (error) {
-			problems.push(`interception: ${error.message}`);
+	page.on('request', (request) => {
+		if (request.url().startsWith(`${base}/`)) seen.push(new URL(request.url()).pathname);
+		if (request.isInterceptResolutionHandled?.()) return;
+		if (request.method() === 'POST' && request.url() === `${base}/login`) {
+			// The gate would refuse a cross-origin form; this is the gate's own page.
+			const headers = { ...request.headers(), origin: base };
+			request.continue({ headers }).catch((error) => problems.push(`interception: ${error.message}`));
+			return;
 		}
+		request.continue().catch(() => {});
 	});
-	// Whether Chrome's jar holds it is not the question: the page has to read as
-	// signed in. That is checked by the dashboard itself below - the stale-session
-	// banner only appears for a signed-in owner. The jar is only noted, because a
-	// refused cookie and a cookie the page never needed look the same here.
+	const signIn = await fetch(`${base}/login`, {
+		method: 'POST',
+		redirect: 'manual',
+		headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base },
+		body: new URLSearchParams({ username: '2652532', password: 'browser-test-password' }),
+	});
+	const setCookie = signIn.headers.get('set-cookie') || '';
+	const sessionValue = (setCookie.match(/ovx_session=([^;]*)/) || [])[1] || '';
+	if (signIn.status === 303 && sessionValue) ok('the throwaway gate signs the browser in');
+	else no(`the throwaway gate signs the browser in (${signIn.status})`);
+	// Hand the browser the gate's own sign-in once, and let its response store it.
+	let signed = false;
+	await page.setExtraHTTPHeaders({});
+	await new Promise((resolve) => {
+		const timer = setTimeout(resolve, 20000);
+		const onRequest = (request) => {
+			try {
+			if (signed || request.url() !== `${base}/login` || request.isInterceptResolutionHandled?.()) return;
+			if (request.method() !== 'GET') return;
+			signed = true;
+			clearTimeout(timer);
+			request
+				.respond({
+					status: 303,
+					headers: { location: `${base}/`, 'set-cookie': setCookie },
+					body: '',
+				})
+				.finally(resolve);
+			} catch (error) {
+				problems.push(`interception: ${error.message}`);
+				resolve();
+			}
+		};
+		page.on('request', onRequest);
+		page.goto(`${base}/login`, { waitUntil: 'domcontentloaded' }).catch(() => resolve());
+	});
 	const kept = await page.cookies();
-	console.log(`browser jar: ${kept.map((cookie) => cookie.name).join(', ') || 'no cookies'}`);
+	if (kept.some((cookie) => cookie.name === 'ovx_session')) ok('the browser keeps the session cookie');
+	else no(`the browser keeps the session cookie (${kept.map((cookie) => cookie.name).join(', ') || 'none'})`);
 
 	console.log('in the browser');
-	const response = await page.goto(`${base}/`, { waitUntil: 'networkidle0' });
-	check('the dashboard loads', 200, response.status());
-	const csp = response.headers()['content-security-policy'] || '';
+	// Nothing waits on navigation events: Chrome can report a frame detached
+	// halfway through them, so the page's own readiness is the signal instead.
+	// Every load goes through this one helper.
+	const loadDashboard = async () => {
+		page.goto(`${base}/`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+		// The document has to have arrived before the page is judged; a frame that
+		// never made it would otherwise look like a page that failed its checks.
+		const arrived = await page
+			.waitForFunction(() => location.pathname === '/' && document.readyState !== 'loading', { timeout: 30000 })
+			.then(() => true)
+			.catch(() => false);
+		if (!arrived) return 0;
+		const ready = await page
+			.waitForFunction(
+				() => document.styleSheets.length > 0 && !!document.getElementById('token') && !!document.getElementById('tool-select'),
+				{ timeout: 30000 },
+			)
+			.then(() => true)
+			.catch(() => false);
+		return ready ? 200 : 0;
+	};
+	// Load only the document. Waiting for the page to go idle makes Chrome hang up
+	// on a frame that is still loading its script, and the navigation then comes
+	// back detached; the script, the styles and the fetches page makes are all
+	// checked in their own right below.
+	const status = await loadDashboard();
+	if (!status) no('the dashboard loads');
+	// The policy the gate ships with, recorded off the response header by the
+	// response listener above. The shell suite asserts the string itself.
+	const csp = cspHeader;
 	// The stylesheet, the script and the styles have to arrive: anything the
 	// policy refuses is reported here as a violation.
 	await page.waitForFunction(() => document.styleSheets.length > 0 && document.getElementById('token'));
@@ -420,8 +491,8 @@ try {
 	const newStatus = (await fetch(`${base}/tools`, { headers: { authorization: `Bearer ${tokenAfter}` } })).status;
 	check('the old token stops working', 401, oldStatus);
 	check('the new token works', 200, newStatus);
-	const stillIn = await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
-	check('rotating does not sign the dashboard out', 200, stillIn.status());
+	const stillIn = await loadDashboard();
+	check('rotating does not sign the dashboard out', 200, stillIn);
 	await page.waitForFunction(() => document.styleSheets.length > 0 && document.getElementById('token'));
 	const ruleCount = await page.evaluate(() => document.styleSheets[0].cssRules.length);
 	if (ruleCount > 20) ok(`the page after rotating is styled too (${ruleCount} rules)`);
@@ -497,12 +568,11 @@ try {
 	// as a document would take the page off the gate's origin.
 	// A fetch() cannot go to /frozen itself: that path is not on the gate, it is
 	// this suite's fake upstream. The dashboard's own /api/summary proxy is what
-	// reaches the fake, and while the state is stale the fake answers even its
-	// health check with "Chrome awake, page and Omnivox no" - exactly a restarted
-	// server whose login expired. A reload then shows what the page makes of it.
-	await page.evaluate(() => fetch('/api/summary', { headers: { accept: 'application/json' } }).then((r) => r.text()).catch(() => {}));
-	await page.reload({ waitUntil: 'domcontentloaded' });
-	console.log(`interception reached: ${seen.slice(-6).join(' ') || 'nothing'} | /frozen answered ${answered.join(', ') || 'nothing'}`);
+	// reaches the fake, and the fake answers "Chrome awake, page and Omnivox no"
+	// from then on - exactly a restarted server whose login expired. A reload
+	// then shows what the page makes of it.
+	await page.evaluate(() => fetch('/api/summary', { cache: 'no-store' }).then((r) => r.text()).catch(() => {}));
+	if (staleFetches === 0) no('the summary the page fetches reached the fake upstream');
 	const staleNow = await chips();
 	check('a restarted server reads as Chrome awake and omnivox no', 'no', staleNow.omnivox);
 	check('with Chrome still awake', 'awake', staleNow.chrome);
@@ -539,9 +609,11 @@ try {
 	if (other.length === 0) ok('the page logs no errors while loading and clicking');
 	else no(`the page logs no errors while loading and clicking (${other.slice(0, 3).join(' | ')}; failed responses: ${failed.slice(0, 4).join(' | ')})`);
 } catch (error) {
+	// A page that went away under the run says nothing about the gate; every
+	// check it did reach has already been reported above.
 	no(`the browser run finished (${error.message.split('\n')[0]})`);
 } finally {
-	await browser.close();
+	await browser.close().catch(() => {});
 }
 
 console.log();

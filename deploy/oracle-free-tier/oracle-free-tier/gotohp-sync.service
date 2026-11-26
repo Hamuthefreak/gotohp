@@ -1,0 +1,36 @@
+[Unit]
+Description=Upload Watermelon backup files to Google Photos (gotohp-cli)
+Documentation=https://github.com/Hamuthefreak/gotohp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gotohpsync
+Group=gotohpsync
+Environment=GOTOHP_SYNC_CONFIG=/etc/gotohp-sync/config.env
+ExecStart=/usr/local/bin/gotohp-sync
+
+# A first push of a whole library can take hours, and a night's backup must not
+# be cut off halfway. Hangs are bounded per gotohp invocation by UPLOAD_TIMEOUT
+# in the relay instead, so this unit no longer needs to guillotine a long run -
+# a stalled upload becomes a failed batch that is retried, not a killed night.
+TimeoutStartSec=infinity
+
+# Uploading is I/O bound and must never starve the box that is also serving
+# SFTP from the phone.
+Nice=10
+IOSchedulingClass=idle
+
+# The date pass stamps each file's mtime with the date stored inside it, and the
+# files belong to the SFTP user. Setting a timestamp is an ownership check, not a
+# write check, so without this the pass silently does nothing ("dated 0 of N" on
+# every run) and every photo is dated by the time it arrived. It grants nothing
+# over file contents: only permission to set times on files it can already read.
+AmbientCapabilities=CAP_FOWNER
+UMask=0077
+NoNewPrivileges=yes
+
+# /var/lib/gotohp-sync holds the ledger, the gotohp config and the credentials.
+StateDirectory=gotohp-sync
+StateDirectoryMode=0700

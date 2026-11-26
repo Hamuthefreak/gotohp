@@ -1,0 +1,17 @@
+[Unit]
+Description=Periodically upload Watermelon backup files to Google Photos
+
+[Timer]
+# Start shortly after boot, then every 10 minutes. The 10 minute gap is also the
+# quiet period a file must survive before it is uploaded, so raising this value
+# raises how long a finished upload has to settle.
+OnBootSec=5min
+OnUnitActiveSec=10min
+AccuracySec=1min
+RandomizedDelaySec=1min
+
+# Catch up after the instance was stopped (idle reclamation, maintenance).
+Persistent=true
+
+[Install]
+WantedBy=timers.target

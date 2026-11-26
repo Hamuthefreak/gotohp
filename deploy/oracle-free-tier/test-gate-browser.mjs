@@ -222,10 +222,14 @@ try {
 	await page.setViewport({ width: 1100, height: 900 });
 	await browser.defaultBrowserContext().overridePermissions(base, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
 	const problems = [];
-	// Every request the page itself makes, so a failure the test causes from
-	// outside the page can be told apart from one the page causes.
-	const pageRequests = [];
-	page.on('request', (request) => pageRequests.push(request.url()));
+	// Chrome prints one generic "Failed to load resource" line per refused
+	// response and names no URL, so the responses are tracked too: a 401 the
+	// test earns on /tools checking a dead token can then be told from a
+	// failure the page really caused.
+	const failed = [];
+	page.on('response', (response) => {
+		if (response.status() >= 400) failed.push(`${response.status()} ${response.url()}`);
+	});
 	page.on('pageerror', (error) => problems.push(`pageerror: ${error.message}`));
 	page.on('console', (message) => {
 		if (message.type() === 'error') problems.push(`console: ${message.text()}`);
@@ -315,14 +319,12 @@ try {
 	const violations = problems.filter((line) => /Content Security Policy|refused to|CSP/i.test(line));
 	if (csp && violations.length === 0) ok(`the shipped CSP permits the page (${csp.slice(0, 46)}...)`);
 	else no(`the shipped CSP permits the page (violations: ${violations.slice(0, 2).join(' | ') || 'none recorded'}, policy: ${csp.slice(0, 40) || 'missing'})`);
-	// The test itself asks /tools with the rotated-away token over plain fetch to
-	// prove it is dead; Chrome logs that 401 like any other failed resource. The
-	// requests the page makes are not fetch, so the page's own errors still fail.
+	const onlyTheTestsToolsRefusal = failed.every((line) => /^401 .*\/tools$/.test(line));
 	const other = problems.filter(
 		(line) =>
 			!violations.includes(line) &&
 			!/favicon/i.test(line) &&
-			!(/\(Unauthorized\)/.test(line) && pageRequests.some((url) => url.endsWith('/tools'))),
+			!(/Failed to load resource/.test(line) && onlyTheTestsToolsRefusal),
 	);
 	if (other.length === 0) ok('the page logs no errors while loading and clicking');
 	else no(`the page logs no errors while loading and clicking (${other.slice(0, 3).join(' | ')})`);

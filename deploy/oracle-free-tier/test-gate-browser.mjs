@@ -256,7 +256,8 @@ const login = await fetch(`${base}/login`, {
 	headers: { 'content-type': 'application/x-www-form-urlencoded' },
 	body: new URLSearchParams({ username: '2652532', password: 'browser-test-password' }),
 });
-const setCookie = login.headers.get('set-cookie') || '';
+// Node joins repeated cookies with a comma; the session is the ovx one.
+const setCookie = (login.headers.getSetCookie?.() || [login.headers.get('set-cookie') || '']).find((line) => line.startsWith('ovx_session=')) || '';
 const pair = setCookie.split(';')[0];
 const sessionCookie = { name: pair.slice(0, pair.indexOf('=')), value: pair.slice(pair.indexOf('=') + 1) };
 if (sessionCookie.value) ok('the throwaway gate signs the browser in');

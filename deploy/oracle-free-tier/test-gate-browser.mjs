@@ -302,7 +302,11 @@ try {
 	});
 	page.on('requestfailed', (request) => problems.push(`requestfailed: ${request.url()}`));
 
-	await page.setCookie({ ...sessionCookie, domain: '127.0.0.1', path: '/', httpOnly: true, sameSite: 'Lax' });
+	// The sign-in already set this cookie in the browser's jar, exactly as the gate
+	// does. Setting it by hand was silently dropped - the jar still holds a
+	// session for http://127.0.0.1, and a second cookie for the same path with no
+	// url is refused - so the page then loaded signed out.
+	await page.setCookie({ ...sessionCookie, url: base, httpOnly: true, sameSite: 'Lax' });
 	const kept = await page.cookies();
 	if (kept.some((cookie) => cookie.name === sessionCookie.name)) ok('the browser keeps the session cookie');
 	else no(`the browser keeps the session cookie (${kept.map((cookie) => cookie.name).join(', ') || 'none'})`);

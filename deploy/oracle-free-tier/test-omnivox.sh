@@ -43,6 +43,7 @@ has 'sets the port' 'PORT=3000' "$env_text"
 has 'points the server at the data folder' "OMNIVOX_DATA_DIR=$DATA" "$env_text"
 has 'keeps the puppeteer cache inside the prefix' "PUPPETEER_CACHE_DIR=$PREFIX/.puppeteer" "$env_text"
 lacks 'keeps the browser out of the re-fetched checkout' "PUPPETEER_CACHE_DIR=$APP" "$env_text"
+has 'a slow page cannot kill the server' 'NODE_OPTIONS=--unhandled-rejections=warn' "$env_text"
 has 'asks chrome to sleep between requests' 'BROWSER_SLEEP=true' "$env_text"
 has 'disables the sandbox for this kernel' '--no-sandbox' "$env_text"
 has 'avoids the 64 MB /dev/shm' '--disable-dev-shm-usage' "$env_text"
@@ -83,7 +84,26 @@ ENV_FILE=$tmp_env migrate_env_paths >/dev/null
 has 'a correct file is left alone' "PUPPETEER_CACHE_DIR=$PREFIX/.puppeteer" "$(cat "$tmp_env")"
 rm -f "$tmp_env"
 
-echo 'systemd unit'
+echo 'surviving a rejected promise'
+# A rejected promise nobody caught ended the whole server on 2026-11-26. The
+# setting lives in the env file, which survives an upgrade, so it has to be
+# added there too.
+tmp_env=$(mktemp)
+printf 'PORT=3000\nBROWSER_SLEEP=false\n' >"$tmp_env"
+ENV_FILE=$tmp_env migrate_unhandled_rejections >/dev/null
+rej=$(cat "$tmp_env")
+has 'adds the setting to an env file that predates it' 'NODE_OPTIONS=--unhandled-rejections=warn' "$rej"
+has 'keeps the rest of the file' 'BROWSER_SLEEP=false' "$rej"
+ENV_FILE=$tmp_env migrate_unhandled_rejections >/dev/null
+rej=$(cat "$tmp_env")
+count=$(grep -c '^NODE_OPTIONS=' "$tmp_env")
+((count == 1)) && ok 'a second run adds no duplicate' || no "a second run adds no duplicate (found $count)"
+printf 'NODE_OPTIONS=--max-old-space-size=256\n' >"$tmp_env"
+ENV_FILE=$tmp_env migrate_unhandled_rejections >/dev/null
+rej=$(cat "$tmp_env")
+has 'replaces a setting that would abort on rejection' 'NODE_OPTIONS=--unhandled-rejections=warn' "$rej"
+lacks 'leaves no second NODE_OPTIONS' 'max-old-space-size' "$rej"
+rm -f "$tmp_env"
 unit=$(render_unit)
 has 'runs as the service user' 'User=omnivox' "$unit"
 has 'runs from the source directory' "WorkingDirectory=$APP" "$unit"

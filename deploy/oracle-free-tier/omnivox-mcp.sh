@@ -97,7 +97,15 @@ BROWSER_SLEEP=$BROWSER_SLEEP
 # unprivileged user namespaces, and /dev/shm on this instance is 64 MB. The
 # server is bound to this host and protected by its access key, so the tradeoff
 # is the one the project's Docker image already makes.
-BROWSER_LAUNCH_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
+	BROWSER_LAUNCH_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage"
+
+# A rejected promise nobody caught kills node: the server died at 06:06:31 on
+# 2026-11-26 with "Timed out waiting for categories response" from
+# MioWeb.ts:59, exit status 1, and every tool after it answered connection
+# refused until systemd restarted the unit. One slow Omnivox page must cost that
+# one request, not the whole server, so a failure is logged with the stack and
+# the process keeps serving.
+NODE_OPTIONS=--unhandled-rejections=warn
 EOF
 }
 
@@ -118,6 +126,23 @@ migrate_env_paths() {
 	else
 		return 0
 	fi
+	chown root:"$SVC_USER" "$ENV_FILE" 2>/dev/null || warn "could not set the owner of $ENV_FILE"
+	chmod 0640 "$ENV_FILE"
+}
+
+migrate_unhandled_rejections() {
+	# An env file from an older install carries no NODE_OPTIONS, and it is kept on
+	# purpose, so the surviving-rejection setting has to be added here or every
+	# upgrade keeps a server that dies on one slow page.
+	[[ -f $ENV_FILE ]] || return 0
+	if grep -q '^NODE_OPTIONS=.*unhandled-rejections=warn' "$ENV_FILE"; then
+		return 0
+	fi
+	if grep -q '^NODE_OPTIONS=' "$ENV_FILE"; then
+		sed -i '/^NODE_OPTIONS=/d' "$ENV_FILE"
+	fi
+	printf 'NODE_OPTIONS=--unhandled-rejections=warn\n' >>"$ENV_FILE"
+	echo "added NODE_OPTIONS=--unhandled-rejections=warn to $ENV_FILE"
 	chown root:"$SVC_USER" "$ENV_FILE" 2>/dev/null || warn "could not set the owner of $ENV_FILE"
 	chmod 0640 "$ENV_FILE"
 }
@@ -294,6 +319,7 @@ install_unit() {
 	if [[ -f $ENV_FILE ]]; then
 		echo "keeping existing $ENV_FILE"
 		migrate_env_paths
+		migrate_unhandled_rejections
 	else
 		(umask 0027 && render_env >"$ENV_FILE")
 		chown root:"$SVC_USER" "$ENV_FILE"

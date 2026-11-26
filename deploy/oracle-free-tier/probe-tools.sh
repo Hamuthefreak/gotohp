@@ -46,6 +46,10 @@ TOOLS = [
     'send-mio-message', 'reply-mio-message', 'delete-mio-message',
     'move-mio-message', 'restore-mio-message', 'flag-mio-message',
     'create-mio-folder',
+    'get-absences', 'get-assignments-summary', 'get-calendar',
+    'get-cancelled-classes', 'get-college-documents', 'get-college-list',
+    'get-college-news', 'get-grades-summary', 'get-online-forms',
+    'get-overview', 'get-schedule', 'get-teachers',
 ]
 WRITE = {
     'send-mio-message', 'reply-mio-message', 'delete-mio-message',
@@ -54,6 +58,14 @@ WRITE = {
 }
 MSG_ID = '11111111-1111-1111-1111-111111111111'
 ATT_ID = '22222222-2222-2222-2222-222222222222'
+TERM_TOOLS = {
+    'get-overview', 'get-schedule', 'get-absences', 'get-teachers',
+    'get-grades-summary', 'get-assignments-summary',
+}
+STATIC_TOOLS = {
+    'get-cancelled-classes', 'get-calendar', 'get-college-list',
+    'get-college-news', 'get-college-documents', 'get-online-forms',
+}
 BOGUS_UUID = '00000000-0000-0000-0000-000000000000'
 
 state = {'mode': 'none', 'downloads': Path('.')}
@@ -91,6 +103,13 @@ class Fake(BaseHTTPRequestHandler):
         mode = state['mode']
         downloads = state['downloads']
 
+        # One tool starts answering the way a server that died mid-request does:
+        # the client gets no answer. Only the one tool, so the self-test proves
+        # the probe reports the tool that broke, not every tool after it.
+        if mode == 'dead' and name == 'get-overview':
+            self.close_connection = True
+            return
+
         # The three failure shapes a real server has produced or could produce.
         if mode == 'errorpage' and name == 'get-course-info':
             self.reply(200, f'File saved to: {downloads}/Error.txt')
@@ -110,6 +129,17 @@ class Fake(BaseHTTPRequestHandler):
         if name == 'create-mio-folder' and not args.get('name', '').strip():
             self.reply(400, 'A folder needs a name: pass the name to create.')
             return
+        # The account-wide reads a client makes with no arguments. Nothing here
+        # kills them, so the baseline must reach them and count them.
+        # The account-wide reads a client makes. Nothing here kills them, so the
+        # baseline has to reach them and the coverage check has to see them.
+        if name in TERM_TOOLS:
+            self.reply(200, f'# {name}\n- term {args.get("term_id") or "(default)"}')
+            return
+        if name in STATIC_TOOLS:
+            self.reply(200, f'# {name}\n- nothing to show')
+            return
+    
         if mode == 'miofalse' and name in ('delete-mio-message', 'restore-mio-message'):
             # What the server said before the MIO guard: Omnivox accepts the
             # impossible id, so the tool reports work it did not do.
@@ -146,7 +176,7 @@ class Fake(BaseHTTPRequestHandler):
 
         bodies = {
             'get-courses-summary': 'Your courses\n- Introduction (ENG1.1234)\n',
-            'get-terms': 'Fall 2026',
+            'get-terms': 'Fall 2026 {"default_term":"20263","terms":[{"id":"20263","name":"Fall 2026"}]}',
             'get-mio-messages': f'inbox\n- {MSG_ID} hello\n',
             'get-mio-folders': 'INBOX\nSent',
             'get-course-assignments': '- ID: ASG1\n',
@@ -191,6 +221,8 @@ for mode, tool, shape, needle in (
     ('http500', 'get-terms', 'non-2xx answer', '500'),
     ('silent', 'search-people', 'tool left unanswered', 'no answer'),
     ('ghostfile', 'get-document-link', 'saved path that does not exist', 'missing, empty or stale'),
+    # The account-wide reads are the ones a broken or unread tool hid before.
+    ('dead', 'get-overview', 'an account-wide read with no answer', 'no answer'),
 ):
     rc, out = run(mode)
     # Each scenario must fail for its own reason, not some other breakage.
@@ -498,6 +530,45 @@ for name, args in (
             print(f'{"  " + name + " says nothing moved":<44} {"":<4} <-- FAIL (a bogus id was not reported honestly)')
         else:
             print(f'{"  " + name + " says nothing moved":<44} {"":<4} ok (honest failure)')
+
+# ---------------------------------------------------------------- account-wide
+# These read the whole account rather than one course. None of them has a
+# required argument, so each is called exactly as a client would. term_id is
+# harvested from get-terms, because passing the live term exercises the term
+# path a client would use, and the tools are called again without it to prove
+# the default is the same term.
+print()
+term_ids = re.findall(r'"id":\s*"(\d{5})"', harvest['get-terms'])
+term = term_ids[0] if term_ids else None
+if not term:
+    failures.append(('harvest term', 0, harvest['get-terms'][:200]))
+    print(f'{"harvest term":<46} {"":<4} <-- FAIL (no term id in get-terms)')
+
+for name, args in (
+    ('get-overview', {'term_id': term} if term else {}),
+    ('get-schedule', {'term_id': term} if term else {}),
+    ('get-absences', {'term_id': term} if term else {}),
+    ('get-teachers', {'term_id': term} if term else {}),
+    ('get-grades-summary', {'term_id': term} if term else {}),
+    ('get-assignments-summary', {'term_id': term} if term else {}),
+    ('get-cancelled-classes', {}),
+    ('get-calendar', {'range': 'week'}),
+    ('get-calendar (all)', {'range': 'all', 'page': 0}),
+    ('get-college-list', {}),
+    ('get-college-news', {}),
+    ('get-college-documents', {}),
+    ('get-online-forms', {}),
+):
+    status, body, _ = call(name.split(' ')[0], args)
+    report(f'{name} ({term})' if term and 'term_id' in args else name, status, body, limit=110)
+
+# The term-free form of every term tool: the same call minus term_id.
+for name in (
+    'get-overview', 'get-schedule', 'get-absences', 'get-teachers',
+    'get-grades-summary', 'get-assignments-summary',
+):
+    status, body, _ = call(name, {})
+    report(f'  {name} (no term_id)', status, body, limit=70)
 
 # ---------------------------------------------------------------- coverage
 print()

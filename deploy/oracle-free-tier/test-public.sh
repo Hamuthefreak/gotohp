@@ -37,20 +37,28 @@ if [[ -z $url ]]; then
 fi
 echo "public url: $url"
 
-# A quick tunnel registers its hostname a moment after cloudflared starts, so
-# the first request of a fresh install can answer 000. Wait for the host to
-# serve /healthz before asserting anything; a deploy that skipped this failed
-# six checks against a tunnel that was up seconds later.
+# A quick tunnel registers its hostname a moment after cloudflared starts, and
+# a brand new name takes a while to come out of DNS: a fresh install can answer
+# 000 for well over a minute (run 45760374285 gave up at 60s; the same URL
+# answered 200 two minutes later, so the deploy failed for nothing). Wait for
+# the host to serve /healthz before asserting anything - for up to five
+# minutes, and print what the last attempt actually saw.
 ready=no
-for _ in $(seq 1 30); do
-	if [[ $(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$url/healthz") == 200 ]]; then
+seen='never attempted'
+for attempt in $(seq 1 60); do
+	seen=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url/healthz" 2>/dev/null || true)
+	if [[ $seen == 200 ]]; then
 		ready=yes
+		printf 'the tunnel answered after %ds\n' "$((attempt * 5))"
 		break
 	fi
-	sleep 2
+	sleep 5
 done
 if [[ $ready == no ]]; then
-	echo "the tunnel never answered at $url/healthz" >&2
+	tunnel_state=$(systemctl is-active ovx-gate-tunnel.service 2>/dev/null || echo unknown)
+	echo "the tunnel never answered at $url/healthz in five minutes (last answer: ${seen:-none}, tunnel unit: $tunnel_state)" >&2
+	echo 'the box itself is fine if the next line is 200: the quick tunnel name has not been published in DNS' >&2
+	curl -s -o /dev/null -w 'loopback /healthz: %{http_code}\n' --max-time 5 http://127.0.0.1:8080/healthz || true
 	exit 1
 fi
 
@@ -70,6 +78,13 @@ if [[ $code == 200 ]] && grep -q '"ok":true' "$TMP/body"; then
 else
 	no "/healthz answered $code: $(head -c 120 "$TMP/body")"
 fi
+
+# The first-run page is styled and scripted by two files of its own; if either
+# is refused the page still loads, just bare and with dead buttons.
+for asset in /assets/app.css /assets/setup.js; do
+	code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$url$asset")
+	[[ $code == 200 ]] && ok "$asset is served" || no "$asset answered $code (the dashboard would render bare)"
+done
 
 code=$(curl -s -o /dev/null -D "$TMP/head" -w '%{http_code}' --max-time 30 "$url/")
 loc=$(grep -i '^location:' "$TMP/head" | tr -d '\r' | awk '{print $2}')

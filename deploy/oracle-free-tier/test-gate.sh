@@ -171,6 +171,15 @@ check 'a cross-origin login is refused' 403 \
 check 'the right password signs in' 303 \
 	"$(curl -s -o /dev/null -w '%{http_code}' -c "$tmp/jar2" -X POST "$base/login" -d 'username=2652532&password=correct-horse-battery')"
 check 'the signed-in dashboard renders' 200 "$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar2" "$base/")"
+# One wrong click must not sign the browser out: the counting hits above only
+# throttle the wrong password, never the right one.
+check 'a wrong password does not kill the session' 200 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$tmp/jar2" "$base/")"
+# The first-run page must fetch its stylesheet and script, otherwise it is bare.
+check 'the stylesheet is served' 200 "$(curl -s -o /dev/null -w '%{http_code}' "$base/assets/app.css")"
+check 'the setup script is served' 200 "$(curl -s -o /dev/null -w '%{http_code}' "$base/assets/setup.js")"
+check 'wrong passwords alone are what gets throttled' 303 \
+	"$(curl -s -o /dev/null -w '%{http_code}' -c "$tmp/jar3" -X POST "$base/login" -d 'username=2652532&password=correct-horse-battery')"
 
 echo 'brute force'
 codes=''

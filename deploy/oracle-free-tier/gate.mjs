@@ -29,6 +29,13 @@ const HTTPS = process.env.GATE_HTTPS === '1';
 const SESSION_TTL = 12 * 60 * 60 * 1000;
 const BODY_LIMIT = 32 * 1024;
 
+// Every switch lives under /api, so nothing else can be mistaken for one.
+const API = '/api/';
+
+// The dashboard carries no inline style or script any more, so this needs no
+// 'unsafe-inline'; the MCP proxy answers with whatever upstream sends.
+const CSP = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
 const FILES = {
 	auth: path.join(DATA_DIR, 'auth.json'),
 	secret: path.join(DATA_DIR, 'session.key'),
@@ -155,6 +162,14 @@ function sessionCookie(value, maxAgeSeconds = SESSION_TTL / 1000) {
 const attempts = new Map();
 
 function tooManyAttempts(ip) {
+	const record = attempts.get(ip);
+	return Boolean(record) && record.count >= 10 && Date.now() <= record.reset;
+}
+
+// Counted for wrong credentials only, so a correct sign-in never spends the
+// budget and ten typos inside a session cannot lock the owner out of a page
+// they are already entitled to see.
+function recordFailure(ip) {
 	const now = Date.now();
 	const record = attempts.get(ip) || { count: 0, reset: now + 10 * 60 * 1000 };
 	if (now > record.reset) {
@@ -163,7 +178,6 @@ function tooManyAttempts(ip) {
 	}
 	record.count += 1;
 	attempts.set(ip, record);
-	return record.count > 10;
 }
 
 function clearAttempts(ip) {
@@ -179,6 +193,9 @@ function send(res, status, body, headers = {}) {
 		'Content-Type': isObject ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8',
 		'Content-Length': Buffer.byteLength(payload),
 		'Cache-Control': 'no-store',
+		'Content-Security-Policy': CSP,
+		'X-Content-Type-Options': 'nosniff',
+		'Referrer-Policy': 'no-referrer',
 		...headers,
 	});
 	res.end(payload);
@@ -323,8 +340,10 @@ function upstreamHealth() {
 	});
 }
 
+// The latest URL cloudflared announced, or '' when it has not yet.
 function tunnelUrl() {
 	if (PUBLIC_URL) return PUBLIC_URL;
+	const remembered = readFileTrim(path.join(DATA_DIR, 'tunnel-url.txt'));
 	let text = '';
 	try {
 		const stat = fs.statSync(CLOUDFLARED_LOG);
@@ -335,10 +354,10 @@ function tunnelUrl() {
 		fs.closeSync(fd);
 		text = buffer.toString('utf8');
 	} catch {
-		return '';
+		return remembered;
 	}
 	const matches = text.match(/https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/gi);
-	if (!matches?.length) return '';
+	if (!matches?.length) return remembered;
 	return matches[matches.length - 1].toLowerCase();
 }
 
@@ -426,11 +445,35 @@ a{color:var(--accent)}
 .banner{border:1px solid #3a2b18;background:#1d1608;color:var(--warn);padding:10px 12px;border-radius:10px;font-size:13px;margin-bottom:16px}
 `;
 
-function layout(title, body) {
+// Every interactive bit the page had inline, now a real file so the page can
+// carry a Content-Security-Policy without 'unsafe-inline'.
+const SCRIPT = `
+for (const box of document.querySelectorAll('[data-copy]')) {
+  box.addEventListener('click', async () => {
+    const field = document.getElementById(box.dataset.copy);
+    if (!field) return;
+    try {
+      await navigator.clipboard.writeText(field.value);
+      const was = box.textContent;
+      box.textContent = 'Copied';
+      setTimeout(() => { box.textContent = was; }, 1500);
+    } catch { field.select(); }
+  });
+}
+for (const form of document.querySelectorAll('form[data-confirm]')) {
+  form.addEventListener('submit', (event) => {
+    if (!window.confirm(form.dataset.confirm)) event.preventDefault();
+  });
+}
+`;
+
+function layout(title, body, script = '') {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>${title}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
+<title>${title}</title><link rel="stylesheet" href="/assets/app.css"></head><body><main>${body}</main>${
+		script ? `<script src="${script}" defer></script>` : ''
+	}</body></html>`;
 }
 
 function loginPage(error = '') {
@@ -471,9 +514,10 @@ function setupPage(error = '') {
         <input id="p" name="password" type="password" autocomplete="new-password">
         <label for="p2">Repeat it</label>
         <input id="p2" name="password2" type="password" autocomplete="new-password">
-        <div class="row" style="margin-top:16px"><button class="primary" type="submit">Set password</button></div>
+        		        <div class="row" style="margin-top:16px"><button class="primary" type="submit">Set password</button></div>
       </form>
     </div>`,
+		'/assets/setup.js',
 	);
 }
 
@@ -504,16 +548,20 @@ function dashboardPage(summary) {
     <h2>MCP endpoint</h2>
     <div class="card">
       <div class="kv">URL</div>
-      <pre style="margin:6px 0 14px">${summary.mcpUrl || 'The tunnel is still starting - reload in a moment.'}</pre>
+      <pre style="margin:6px 0 14px">${summary.mcpUrl || 'The tunnel is still starting - reload in a moment.'}</pre>${
+				summary.mcpUrl
+					? ''
+					: `<form method="post" action="${API}tunnel/refresh" style="margin:0 0 12px"><button type="submit" id="tunnel-refresh">Look again</button></form>`
+			}
       <div class="kv">Bearer token</div>
       <div class="token" style="margin:8px 0 4px">
         <input id="token" value="${summary.token}" readonly>
-        <button onclick="navigator.clipboard.writeText(document.getElementById('token').value)">Copy</button>
+        <button type="button" data-copy="token">Copy</button>
       </div>
       <p class="muted small">Send it as <code>Authorization: Bearer &lt;token&gt;</code> to the URL above. Rotating it
       signs every client out; the dashboard stays signed in.</p>
       <div class="row" style="margin-top:12px">
-        <form method="post" action="/api/token/rotate" onsubmit="return confirm('Rotate the token? Every client using the old one stops working.')">
+        <form method="post" action="${API}token/rotate" data-confirm="Rotate the token? Every client using the old one stops working.">
           <button type="submit">Rotate token</button>
         </form>
         <form method="post" action="/logout"><button type="submit">Sign out</button></form>
@@ -534,6 +582,7 @@ function dashboardPage(summary) {
 }</pre>
       <p class="muted small">For clients that only speak stdio, run <code>npx mcp-remote &lt;url&gt; --header "Authorization: Bearer $TOKEN"</code>.</p>
     </div>`,
+		'/assets/setup.js',
 	);
 }
 
@@ -547,6 +596,15 @@ async function handle(req, res) {
 
 	if (url.pathname === '/healthz') {
 		return send(res, 200, { ok: true, uptime: Math.round(process.uptime()) });
+	}
+
+	// The page is served under that exact path, never passed to the proxy.
+	if (url.pathname === '/assets/app.css') {
+		return send(res, 200, STYLE, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
+	}
+
+	if (url.pathname === '/assets/setup.js') {
+		return send(res, 200, SCRIPT, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=3600' });
 	}
 
 	if (url.pathname === '/setup') {
@@ -579,7 +637,10 @@ async function handle(req, res) {
 		if (tooManyAttempts(ip)) return html(res, 429, loginPage('Too many attempts. Wait ten minutes.'));
 		const form = await readForm(req);
 		const ok = String(form.username || '') === st.auth.user && checkPassword(String(form.password || ''), st.auth);
-		if (!ok) return html(res, 401, loginPage('Wrong username or password.'));
+		if (!ok) {
+			recordFailure(ip);
+			return html(res, 401, loginPage('Wrong username or password.'));
+		}
 		clearAttempts(ip);
 		return redirect(res, '/', { 'Set-Cookie': sessionCookie(signSession(st.auth.user)) });
 	}
@@ -606,6 +667,17 @@ async function handle(req, res) {
 		return html(res, 200, dashboardPage(summary));
 	}
 
+	if (url.pathname === '/api/tunnel/refresh') {
+		if (!session) return send(res, 401, { error: 'sign in first' });
+		if (method !== 'POST') return send(res, 405, { error: 'method not allowed' });
+		if (!sameOrigin(req)) return send(res, 403, { error: 'cross-origin request refused' });
+		const found = tunnelUrl();
+		// The tunnel prints its name once; remember it so a later restart of the
+		// gatekeeper does not have to race the log to show it again.
+		if (found) writePrivate(path.join(DATA_DIR, 'tunnel-url.txt'), found);
+		return redirect(res, '/');
+	}
+
 	if (url.pathname === '/api/summary') {
 		if (!session) return send(res, 401, { error: 'sign in first' });
 		return send(res, 200, {
@@ -629,6 +701,10 @@ async function handle(req, res) {
 	}
 
 	// Everything else is the MCP server: /mcp, /sse, /messages, /tools, /download...
+	// A dashboard switch that reaches here is a typo, not an MCP call.
+	if (url.pathname.startsWith(API)) {
+		return send(res, 404, { error: `no such dashboard endpoint: ${url.pathname}` });
+	}
 	if (!bearerOk(req, url)) {
 		return send(res, 401, { error: 'Send Authorization: Bearer <token>' }, { 'WWW-Authenticate': 'Bearer realm="omnivox"' });
 	}

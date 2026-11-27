@@ -489,7 +489,9 @@ for name, args in (
 ):
     status, body, _ = call(name, args)
     harvest[name] = body
-    report(name, status, body, limit=80)
+    # The inbox listing is parsed for message ids, so it is printed whole: a
+    # shape the parser does not expect has to be visible, not guessed.
+    report(name, status, body, limit=3000 if name == 'get-mio-messages' else 80)
 # The same listing, kept whole: a message body that explains itself is only
 # readable when the sections above are not cut at a fixed width.
 raw = {name: body for name, body in ((n, harvest[n]) for n in harvest)}

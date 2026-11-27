@@ -9,10 +9,10 @@ nothing invented.
 | Pin | Value |
 | --- | --- |
 | Live servers | `https://github.com/Beat-YT/omnivox-mcp` at `6164a1aa191424fa2d0c27836a44c0f5b89f8858` (`main`, depth 1), patched on the box by this repo's `patch-*.py` |
-| This repo at the moment of proof | `ac379ae` (`docs(tools): ledger read-document, and probe the PDF an attachment really is`) |
-| Deploy run | `45940960937`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
+| This repo at the moment of proof | `e865bae` (`fix(probe): prefer the test's own solutions over a practice sheet for it`) |
+| Deploy run | `45944882954`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
 | Live tool list | that run's own output, line `/tools answers 43 tools`, printed after the install step |
-| Per-tool evidence | the same job's probe output, `76 answered, 16 rejected bad input, 43 of 43 tools exercised` |
+| Per-tool evidence | the same job's probe output, `95 answered, 31 rejected bad input, 43 of 43 tools exercised` |
 | Server with the extra tools | `d233cba` (college document link, MIO message link, campus events), `f1e5a4f` (upcoming schedule), `a93232c` (read document) |
 
 The tool names below are transcribed from the `/tools` answer above, not from
@@ -45,7 +45,7 @@ reason says which. Tools are read-only unless the row says otherwise.
 | --- | --- | --- | --- | --- |
 | `get-mio-messages` | `6164a1a` | probe `get-mio-messages` | `200 # MIO messages 38 unread / 114 total, showing 21` | live |
 | `get-mio-folders` | `6164a1a` | probe `get-mio-folders` | `200 # MIO folders (38 unread)` | live |
-| `read-mio-message` | `6164a1a` | probe `read-mio-message` | `200 # food drive … ## Attachments - Vanier_Food_Drive.pdf … has an attachment: e8fc928a-…` | live |
+| `read-mio-message` | `6164a1a` | probe `read-mio-message` (body `some of you were asking about a vanier food drive last night…`, 113 characters) | `200 # food drive … ## Attachments - Vanier_Food_Drive.pdf … has an attachment: e8fc928a-…` | live |
 | `search-mio-messages` | `6164a1a` | probe `search-mio-messages` | `200 # MIO search: "vanier" 21 result(s)` | live |
 | `get-mio-attachment-link` | `6164a1a` | probe `get-mio-attachment-link` | `200 File saved to: …/downloads/Vanier_Food_Drive.pdf` | live |
 | `get-mio-message-link` | `d233cba` (this repo) | probe `get-mio-message-link` | `200 File saved to: …/downloads/Vanier_Food_Drive.pdf (32263 bytes)` | live |
@@ -64,7 +64,7 @@ reason says which. Tools are read-only unless the row says otherwise.
 | --- | --- | --- | --- | --- |
 | `get-course-assignments` | `6164a1a` | probe `get-course-assignments` for 6 courses | `200` 2, 0, 0, 13, 0 and 3 assignment(s), with due dates | live |
 | `get-assignments-summary` | `6164a1a` | probe `get-assignments-summary (20263)` | `200 # Assignments — term 20263 (6 courses)` | live |
-| `get-assignment-detail` | `6164a1a` | probe `get-assignment-detail` on 3 ids | `200` title, status, published/due dates, deposit state; instructions come back with it | live |
+| `get-assignment-detail` | `6164a1a` | probe `get-assignment-detail` on up to 20 ids | `200` title, status, published/due dates, deposit state, and real instructions text: `Please complete the following reflection using Google Forms: https://forms.gle/7…`. Most of this account's assignments carry no description text, and the detail now says so by name instead of printing nothing | live |
 | `get-assignment-file-link` | `6164a1a` | probe `get-assignment-file-link (bogus)` | `400 file_id must be a valid UUID` | unverified: no real assignment file id came back in the account's data, so only the rejection was exercised |
 | `get-assignment-submit-link` | `6164a1a` | probe `get-assignment-submit-link` | `500 says it needs MCP_SERVER_URL` | unverified: a URL builder that needs the public base URL, no Omnivox round trip is proven |
 | `get-course-announcements` | `6164a1a` | probe `get-course-announcements` for 6 courses | `200` 0, 22, 3, 0, 5 and 0 announcement(s) | live |
@@ -78,14 +78,17 @@ is the other half: the same file, fetched and read, so the text comes back.
 | --- | --- | --- | --- | --- |
 | `read-document` | `a93232c` (this repo) | probe `read-document` on a real course document, and `read-document (bogus)` | `200 # F26_McIntyre_102-SWB_19.docx application/vnd…wordprocessingml.document, 88 KB, docx` and 24746 characters of its text, not a path; a wrong id answers `500 Omnivox answered with an error page` | live |
 | `read-document` | `a93232c` (this repo) | probe `read-document (mio attachment)` on the real attachment read-mio-message lists | `200 # Vanier_Food_Drive.pdf application/pdf, 32 KB, 1 page, pdf` and its text, so the PDF a client meets on a MIO or a solutions sheet is read, not saved | live |
+| `read-document` | `a93232c` (this repo) | probe `read-document` on **Solutions to Test 2**, chosen by its own title from the Discrete Mathematics listing | `200` and 5662 characters of it: `MATH 201-201-RE Discrete Mathematics — Fall 2026 Test 2: Solutions Summary 1. Modular Arit…` - the mission's document, as text | live |
+| `read-document` | `a93232c` (this repo) | probe `read-document (a second document)` on the `.docx` the link tool saves | `200 # F26_McIntyre_102-SWB_19.docx … docx` and its text (`Course outline 109-102-MQ sect. 00019`), not a path | live |
+| `read-document` | `a93232c` (this repo) | probe `read-document (college document)` on a college document with a file | `200` 180 characters, not a path | live |
 
 ### Schedule, canceled classes, campus events
 
 | Tool | Introduced | Exercised by | Observed | Verdict |
 | --- | --- | --- | --- | --- |
-| `get-upcoming-schedule` | `f1e5a4f` (this repo) | probe `get-upcoming-schedule` and `(14 days)` | `200 # Next 7 days: 16 entries` and `# Next 14 days: 23 entries`, with times and rooms | live |
+| `get-upcoming-schedule` | `f1e5a4f` (this repo) | probe `get-upcoming-schedule`, `(14 days)` and `(21 days)` | `200 # Next 7 days: 17 entries`, `# Next 14 days: 24 entries` and `# Next 21 days: 26 entries`, with times and rooms | live |
 | `get-schedule` | `6164a1a` | probe `get-schedule (20263)` | `200 # Weekly schedule: term 20263 (12 slots)` | live |
-| `get-cancelled-classes` | `6164a1a` | probe `get-cancelled-classes` | `200 # Cancelled classes No cancelled classes.` | live (empty: answered "none", no populated list seen) |
+| `get-cancelled-classes` | `6164a1a` | probe `get-cancelled-classes` | `200 No cancelled classes. Omnivox agrees: IndicateurAucunCoursAnnule is true (array fields: ListeAnnulationCours (0)).` - the flag and the array it read are named, so "none" is checkable | live (empty: Omnivox's own flag says none, so no populated list exists to see) |
 | `get-campus-events` | `d233cba` (this repo) | probe `get-campus-events` | `200 # Campus events The college lists no events right now.` | live (empty: answered "none", no populated list seen) |
 | `get-calendar` | `6164a1a` | probe `get-calendar` and `(all)` | `200 Current Time: 2026-11-26 …` | live |
 
@@ -120,11 +123,28 @@ is the other half: the same file, fetched and read, so the text comes back.
 | Other existing read tools | 13 | 11 | 2 |
 | **Served tool set** | **43** | | |
 
-The ledger holds 47 rows over the 43 served tools: four tools have a second row
-for the bogus-id path. 30 served tools are live-confirmed (28 answering data, 2
-answering an honest "none"), 13 are unverified, and every unverified one is a
-write tool refused before Omnivox, a bogus-id-only exercise, or a read the
-server keeps switched off.
+Every served tool has a row, and a tool the probe calls more than once (a real
+id, a bogus id, a second source) has a row per call, so the table is longer than
+the tool list. 30 served tools are live-confirmed (28 answering data, 2 answering
+an honest "none"), 13 are unverified, and every unverified one is a write tool
+refused before Omnivox, a bogus-id-only exercise, or a read the server keeps
+switched off.
+
+## Finding the endpoint
+
+The quick tunnel's name is new on every start, so it is written down instead of
+remembered. `/opt/omnivox-mcp/endpoint.txt` holds `url`, `mcp`, `tools` and
+`updated`, with the bare URL in `/opt/omnivox-mcp/public-url` beside it. Both are
+rewritten by the tunnel unit's `ExecStartPost` (each time cloudflared starts,
+which is when the name changes), by `omnivox-gate install`, by
+`omnivox-gate status` and by `omnivox-gate url`, which prints the same name from
+the log. `omnivox-gate status` also asks the MCP server for its tool count, so
+the file can be checked against the server on the same box.
+
+A name that never changes needs a named Cloudflare tunnel on a domain the account
+controls, run with its token instead of the quick tunnel; the box has no such
+domain, and that token would have to come from the owner. Until then the file
+above is the recovery path.
 
 ## Why the empty answers still count
 

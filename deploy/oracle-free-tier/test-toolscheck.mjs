@@ -210,7 +210,7 @@ else no('and proves it can fail against a closed port');
 // What the probe picks to fetch has to be something that can be fetched: a
 // notice's id is not a file, and a message id that is not a v4 never reaches
 // Omnivox. Both are chosen from the listing, block by block and v4 first.
-if (/for block in re\.split/.test(toolList)) ok('the college document is chosen from its own block');
+if (/for at, doc_id in id_at\.items\(\)/.test(toolList) && /- File:'in line|'- File:' in part/.test(toolList) || /line\.startswith\('- File:'\)/.test(toolList)) ok('the college document is chosen from its own block');
 else no('the college document is chosen from its own block');
 if (/for mid in \[m for m in message_ids if V4\.fullmatch\(m\)\]/.test(toolList)) ok('only v4 message ids are read');
 else no('only v4 message ids are read');

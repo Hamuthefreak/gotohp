@@ -762,14 +762,29 @@ college = []
 # A notice the college lists without a file, if the listing has one: fetching it
 # has to be a clear refusal that names the notice, never a wrong file.
 notice = None
-for block in re.split(r'\n## ', raw.get('get-college-documents', harvest['get-college-documents'])):
-    found = re.search(r'- ID: ([0-9a-fA-F-]{36})', block)
-    if not found:
-        continue
-    if '- File:' in block:
-        college.append(found.group(1))
-    elif notice is None and block.strip():
-        notice = found.group(1)
+# What belongs to a document is the lines above its id back to the previous id
+# (its heading and fields), plus the lines below it up to the next heading. The
+# listing does not always start a document with its own heading, so splitting
+# on headings alone hid the only document that has a file.
+lines = raw.get('get-college-documents', harvest['get-college-documents']).splitlines()
+id_at = {i: re.search(r'- ID: ([0-9a-fA-F-]{36})', line).group(1)
+         for i, line in enumerate(lines) if re.search(r'- ID: ([0-9a-fA-F-]{36})', line)}
+college = []
+notice = None
+for at, doc_id in id_at.items():
+    above = [k for k in id_at if k < at]
+    top = (above[-1] + 1) if above else 0
+    below = [at] + [k for k in id_at if k > at]
+    bottom = min(below[1], len(lines)) if len(below) > 1 else len(lines)
+    part = lines[top:min(at, bottom)]
+    for k in range(at + 1, bottom):
+        if lines[k].startswith('## '):
+            break
+        part.append(lines[k])
+    if any(line.startswith('- File:') for line in part):
+        college.append(doc_id)
+    elif notice is None:
+        notice = doc_id
 if college:
     started = time.time()
     status, body, _ = call('get-college-document-link', {'document_id': college[0]})

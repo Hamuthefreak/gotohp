@@ -64,7 +64,9 @@ export async function GetCollegeDocumentFile(documentId: string) {
 
     const raw: string = item.PathFichier ?? item.UrlFichier ?? item.Url ?? '';
     if (!raw) {
-        throw new Error(`College document ${documentId} has no file attached (${String(item.Titre ?? item.NomDocument ?? '').trim() || 'untitled'}).`);
+        // Some entries are notices with no file at all: the listing marks them
+        // by type, and there is nothing to fetch.
+        throw new Error(`College document ${documentId} has no file attached (${String(item.Titre ?? item.NomDocument ?? '').trim() || 'untitled'}; type ${item.TypeDocument ?? '?'}). Call get-college-documents for the ones that do.`);
     }
 
     const page = await omnivox.page();
@@ -175,7 +177,7 @@ const when = (value: any) => {
 mcpServer.registerTool('get-campus-events',
     {
         title: 'Get Campus Events',
-        description: 'Upcoming events the college publishes (talks, open houses, activities), with their start and end, where they happen and a short description. Read-only.',
+        description: 'Events on the college calendar (talks, open houses, closures, activities), with their start and end from the same call the app calendar makes. Read-only.',
         inputSchema: input,
         annotations: {
             readOnlyHint: true,
@@ -191,13 +193,14 @@ mcpServer.registerTool('get-campus-events',
             };
         }
 
-        const lines = [`# Campus events (${list.length})`, ''];
+        const lines = [`# Campus events (${list.length})`, '', 'The college calendar lists past events too; each one says when it has finished.', ''];
         for (const event of list) {
             const title = event?.Titre ?? event?.NomEvenement ?? event?.Nom ?? event?.TitreEvenement ?? '(untitled event)';
             lines.push(`## ${title}`);
-            const start = when(event?.DateDebut ?? event?.DateEvenement ?? event?.Date);
-            const end = when(event?.DateFin);
+            const start = when(event?.TimestampDateEvenement ?? event?.DateDebut ?? event?.DateEvenement ?? event?.Date);
+            const end = when(event?.TimestampDateFin ?? event?.DateFin);
             if (start) lines.push(`- When: ${start}${end ? ` to ${end}` : ''}`);
+            if (event?.EstTermine === true) lines.push('- Finished: yes');
             const where = event?.Lieu ?? event?.Local ?? event?.Endroit;
             if (where) lines.push(`- Where: ${where}`);
             const text = htmlToText(event?.Description ?? event?.Texte ?? event?.Contenu ?? event?.Resume);
@@ -215,13 +218,14 @@ mcpServer.registerTool('get-campus-events',
 
 EVENTS_REQUEST = '''
 
-// The College module's events list - what the app's "Events" screen shows. Nothing
-// in the app called it yet, so `get-campus-events` is the first reader.
-export function GetListeEvenement(count: number = 20) {
-    return omnivox.postJson<any[]>(
-        '/Mobl/College/ListeEvenement',
-        { NombreItem: count }
-    );
+// The college calendar's first page - the same call the app's own calendar
+// makes, read only. It answers an envelope whose ListeEvenements each wrap an
+// Evenement; nothing in the app called it yet, so `get-campus-events` is the
+// first reader.
+export async function GetListeEvenement(count: number = 20) {
+    const model: any = await omnivox.postJson('/Mobl/College/EvenementsWeb_GetFirstLoad', {});
+    const entries: any[] = Array.isArray(model?.ListeEvenements) ? model.ListeEvenements : [];
+    return entries.map((entry: any) => entry?.Evenement ?? entry).filter(Boolean).slice(0, Math.max(1, count));
 }
 '''
 

@@ -543,14 +543,22 @@ message_ids = list(dict.fromkeys(
 if not message_ids:
     failures.append(('get-mio-messages listed no id', 200, harvest['get-mio-messages'][:200]))
     print(f'{"read-mio-message":<46} {"":<4} <-- FAIL (no message id in the inbox listing)')
+# Messages without an attachment are normal, so the probe reads messages until
+# one lists one. read-mio-message writes it as "[attachment_id: ...]".
 attachment = None
-for mid in message_ids[:1]:
+read = 0
+for mid in message_ids[:12]:
     status, body, _ = call('read-mio-message', {'message_id': mid})
-    report('read-mio-message', status, body, limit=110)
-    # read-mio-message lists each attachment as "[attachment_id: ...]".
+    read += 1
+    if read == 1 or status != 200:
+        report('read-mio-message', status, body, limit=110)
+    elif not 200 <= status < 300:
+        report('read-mio-message', status, body, limit=110)
     match = re.search(r'attachment_id: ([0-9A-Fa-f-]{8,})', body)
-    if match:
+    if 200 <= status < 300 and match:
         attachment = (mid, match.group(1))
+        print(f'{"read-mio-message (" + str(read) + " read)":<46} {status:<4} has an attachment: {match.group(1)}')
+        break
 
 if attachment:
     mid, att = attachment
@@ -673,7 +681,12 @@ for name in (
 
 # The three tools this deployment adds on top of upstream, each with the file
 # it is supposed to leave behind or the list it is supposed to refuse.
-college = re.findall(r'- ID: ([0-9a-fA-F-]{36})', harvest['get-college-documents'])
+# Only an entry that names a file can be fetched. get-college-documents prints
+# "- File: <ext>, <size>" for those, and some notices carry none at all.
+college = [
+    match.group(1)
+    for match in re.finditer(r'- File: .*\n(?:.*\n)*?- ID: ([0-9a-fA-F-]{36})', harvest['get-college-documents'])
+]
 if college:
     started = time.time()
     status, body, _ = call('get-college-document-link', {'document_id': college[0]})

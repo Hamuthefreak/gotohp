@@ -333,6 +333,10 @@ install_unit() {
 	chmod 0644 "$UNIT"
 	systemctl daemon-reload
 	systemctl enable omnivox-mcp.service >/dev/null 2>&1 || true
+	# A unit that crash-looped has been rate-limited by systemd ("Start request
+	# repeated too quickly"), and that refusal outlives the cause: without this
+	# reset a fixed build could not start until the rate limit passed on its own.
+	systemctl reset-failed omnivox-mcp.service >/dev/null 2>&1 || true
 	# The server exits immediately when config.json is missing, so starting it
 	# before a session exists only fills the journal with a restart loop.
 	if [[ $(start_decision) == start ]]; then

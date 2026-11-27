@@ -393,6 +393,17 @@ has 'the installer stops a leftover server before patching' 'free_port' "$instal
 # served tool list stayed the build from before the update, with no error.
 has 'update installs the unit when the box runs one' 'running == 1 || -f $UNIT' "$installer"
 has 'and fails when the server does not come up' 'wait_health || {' "$installer"
+# After a crash loop systemd rate-limits the unit; the reset has to happen
+# before the start, or a fixed build stays refused.
+python3 - "$installer" <<'PYEOF'
+import sys
+t = sys.argv[1]
+i = t.index('systemctl daemon-reload')
+reset = t.index('reset-failed', i)
+start = t.index('systemctl restart omnivox-mcp.service', i)
+sys.exit(0 if reset < start else 1)
+PYEOF
+(( $? == 0 )) && ok 'a rate-limited unit is reset before it is started' || no 'a rate-limited unit is reset before it is started'
 has 'and proves /tools answers after the update' '/tools' "$installer"
 has 'update stops it before it touches the checkout' \
     "$(printf 'do_update() {\n\t# Before anything is written' | head -2 | tail -1)" "$installer"

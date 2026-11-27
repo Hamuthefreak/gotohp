@@ -708,7 +708,11 @@ def how_close(pair):
     score = 0
     if re.search(r'solution|corrig|answer', title, re.I):
         score += 2
-    if re.search(r'test\s*2|test_2|test-2|\btest\b', title, re.I):
+    # "Test 2" is the one the mission names and it has to beat "Test 1" and a
+    # practice sheet for Test 1, which are also solutions with "test" in them.
+    if re.search(r'test\s*[-#]?\s*2\b', title, re.I):
+        score += 5
+    elif re.search(r'\btest\b', title, re.I):
         score += 2
     return -score
 

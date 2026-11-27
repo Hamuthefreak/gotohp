@@ -195,6 +195,18 @@ else no('a patch failure is echoed with its exit code');
 if (/do_update\(\) \{\n(\t[^\n]*\n)*\tfree_port/.test(installer)) ok('update stops the old server before patching');
 else no('update stops the old server before patching');
 
+// The served tool list is read by its own shipped file, and that file has to
+// agree with the probe about which tools this deployment adds.
+const live = fs.readFileSync(path.join(here, 'toolscheck-live.py'), 'utf8');
+for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events', 'get-upcoming-schedule']) {
+	if (live.includes(`'${tool}'`)) ok(`the served-tool check asks for ${tool}`);
+	else no(`the served-tool check asks for ${tool}`);
+}
+if (/except urllib\.error\.HTTPError/.test(live)) ok('and reports a refused key instead of crashing');
+else no('and reports a refused key instead of crashing');
+if (/closed port/.test(live)) ok('and proves it can fail against a closed port');
+else no('and proves it can fail against a closed port');
+
 console.log();
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -117,6 +117,7 @@ jobs:
             deploy/oracle-free-tier/patch-mio-guard.py \
             deploy/oracle-free-tier/patch-extra-tools.py \
             deploy/oracle-free-tier/test-toolscheck.mjs \
+            deploy/oracle-free-tier/toolscheck-live.py \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
           # The same suite against the shipped gate, on the box. The box's own
@@ -133,37 +134,12 @@ jobs:
              bash /tmp/ovx-gate-ship/test-gate.sh'
 
           # The tool list a client actually receives, read from outside every
-          # script above: only the bytes the server answers on /tools, plus the
-          # same fetch from an unreachable port to prove the check can fail.
-          # /tools needs the server's own access key, so the key is read on the
-          # box and passed in; it is never printed or sent to this runner.
+          # script above: the bytes the server answers on /tools, every name, and
+          # a second fetch against a closed port so the check is shown to fail.
+          # The key is read on the box and passed in the environment only.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n python3 - "$(sudo -n cat /opt/omnivox-mcp/data/accessKey.txt)" <<"PY"
-          import json, sys, urllib.error, urllib.request
-          key = sys.argv[1]
-          def tools(port):
-              req = urllib.request.Request(f"http://127.0.0.1:{port}/tools", headers={"x-mcp-auth": key})
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  return json.load(r)
-          served = sorted(t["name"] for t in tools(3000)["tools"])
-          print(f"/tools answers {len(served)} tools")
-          for t in served:
-              print(f"  {t}")
-          missing = [n for n in ("get-college-document-link", "get-mio-message-link",
-                                 "get-campus-events", "get-upcoming-schedule")
-                     if n not in served]
-          if missing:
-              print(f"::error::the live server does not serve {missing}")
-              sys.exit(1)
-          try:
-              tools(1)
-              print("::error::the tool-list check read a port that must be closed")
-              sys.exit(1)
-          except OSError:
-              print("the same check fails on a closed port, so it can fail")
-          except urllib.error.HTTPError as err:
-              print(f"the same check fails when the key is refused ({err.code})")
-          PY'
+            'KEY=$(sudo -n cat /opt/omnivox-mcp/data/accessKey.txt) sudo -n -E \
+               python3 /tmp/ovx-gate-ship/toolscheck-live.py'
 
           # The probe is only evidence if it can fail: run its self-test, which
           # breaks a fake server three ways and demands a non-zero exit naming

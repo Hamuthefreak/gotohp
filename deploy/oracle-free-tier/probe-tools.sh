@@ -610,17 +610,8 @@ if not message_ids:
 # one lists one. read-mio-message writes it as "[attachment_id: ...]".
 attachment = None
 read = 0
-# The attachments view names the messages that really have one, which is exact
-# where "[attachment_id: ...]" in a message body depends on how the body is
-# written. A message it names that this listing does not hold is still ours to
-# read: the id came from the same account.
-listed = []
-status, body, _ = call('get-mio-attachments', {})
-report('get-mio-attachments', status, body, limit=90)
-for line in body.splitlines():
-    found = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', line)
-    if found and V4.fullmatch(found.group(1)):
-        listed.append(found.group(1))
+# The inbox says which messages carry an attachment, which is exact where
+# scanning a body for an id depends on how that body is written.
 # The inbox itself says which messages carry an attachment ("- Attachments:
 # name"), and reading one of those first is what makes the attachment tools
 # reachable at all when the body does not repeat the id.
@@ -631,7 +622,7 @@ for block in re.split(r'\n## ', inbox):
         found = re.search(r'- ID: ([0-9A-Fa-f-]{8}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{12})', block)
         if found:
             with_file.append(found.group(1))
-message_ids = listed + with_file + [m for m in message_ids if m not in listed and m not in with_file]
+message_ids = with_file + [m for m in message_ids if m not in with_file]
 # A message id that is not a v4 is refused before it reaches Omnivox, so it
 # proves nothing and must not eat the budget that finds an attachment.
 for mid in [m for m in message_ids if V4.fullmatch(m)][:12]:

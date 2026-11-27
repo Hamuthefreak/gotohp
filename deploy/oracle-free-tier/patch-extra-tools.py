@@ -47,12 +47,21 @@ import { z } from "zod";
 // A college document is a file the college pushes to you. It is a DocMessageCollege
 export async function GetCollegeDocumentFile(documentId: string) {
     const model: any = await omnivox.postJson('/Mobl/DocMessageCollege/GetDefaultModel', {});
+    // Every list the model carries, not the first one that is an array: the
+    // documents and the messages are separate lists, and picking one of them
+    // hid a listed id from the very tool the list points at.
     const lists = [
         model?.ListeDocumentsMessages?.ListeDocuments,
         model?.ListeDocuments,
         model?.ListeDocument,
+        model?.ListeDocumentsMessages,
+        model?.ListeMessages,
+        model?.ListeMessagesDocuments,
     ];
-    const items: any[] = lists.find(Array.isArray) ?? [];
+    const items: any[] = lists.filter(Array.isArray).flat();
+    if (!items.length) {
+        items.push(...Object.values(model ?? {}).filter((value) => Array.isArray(value)).flat());
+    }
     const wanted = documentId.toLowerCase();
     const item = items.find((entry) =>
         [entry?.IDDocument, entry?.IdDocument, entry?.Id, entry?.Guid].some((value) => String(value ?? '').toLowerCase() === wanted)
@@ -95,7 +104,7 @@ const input = z.object({
 mcpServer.registerTool('get-college-document-link',
     {
         title: 'Get College Document',
-        description: 'Fetch the file of a document the college sent you: registration and pre-requisite letters, the course drop and incomplete grade reminders, the midterm assessment notice, the registrar guide. document_id comes from get-college-documents. In HTTP mode with MCP_SERVER_URL set it returns a link that expires in 15 minutes; otherwise the file is saved on the server and its path is returned.',
+        description: 'Read the text of a document the college sent you: registration and pre-requisite letters, the course drop and incomplete grade reminders, the midterm assessment notice, the registrar guide. It reads the text Omnivox already has for it and opens nothing in the portal, so it is not the same as opening the notice yourself: it does not acknowledge anything, and a notice with no file says so. document_id comes from get-college-documents. In HTTP mode with MCP_SERVER_URL set it returns a link that expires in 15 minutes; otherwise the file is saved on the server and its path is returned.',
         inputSchema: input,
         annotations: {
             readOnlyHint: true,

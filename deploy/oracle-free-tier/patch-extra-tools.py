@@ -42,11 +42,9 @@ import { mcpServer } from "src/mcp/server";
 import { isHttpMode } from "@common/transportMode";
 import { createWebToken } from "src/security/omniWebToken";
 import { saveDownload } from "@common/downloads";
-import { messageIdSchema } from "@common/validation";
 import { z } from "zod";
 
 // A college document is a file the college pushes to you. It is a DocMessageCollege
-// entry, not a Lea document, so get-document-link cannot fetch it.
 export async function GetCollegeDocumentFile(documentId: string) {
     const model: any = await omnivox.postJson('/Mobl/DocMessageCollege/GetDefaultModel', {});
     const lists = [
@@ -86,8 +84,12 @@ export async function GetCollegeDocumentFile(documentId: string) {
     };
 }
 
+// Ids as the listings print them: any UUID version, since Omnivox does not
+// only use v4 and a listed id has to be usable.
+const listedIdSchema = z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, 'a UUID as the listing prints it');
+
 const input = z.object({
-    document_id: messageIdSchema.describe('The document ID listed by get-college-documents.'),
+    document_id: listedIdSchema.describe('The document ID listed by get-college-documents.'),
 });
 
 mcpServer.registerTool('get-college-document-link',
@@ -121,14 +123,17 @@ mcpServer.registerTool('get-college-document-link',
 MIO_MESSAGE_LINK = '''import { GetMioAttachment, ResolveMioAttachment } from "@api/Mio";
 import { mcpServer } from "src/mcp/server";
 import { isHttpMode } from "@common/transportMode";
-import { messageIdSchema } from "@common/validation";
 import { createWebToken } from "src/security/omniWebToken";
 import { saveDownload } from "@common/downloads";
 import { z } from "zod";
 
+// Ids as the listings print them: any UUID version, since Omnivox does not
+// only use v4 and a listed id has to be usable.
+const listedIdSchema = z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/, 'a UUID as the listing prints it');
+
 const input = z.object({
-    message_id: messageIdSchema.describe('The MIO message ID from get-mio-messages or read-mio-message.'),
-    attachment_id: messageIdSchema.describe('The attachment_id read-mio-message lists under Attachments.'),
+    message_id: listedIdSchema.describe('The MIO message ID from get-mio-messages or read-mio-message.'),
+    attachment_id: listedIdSchema.describe('The attachment_id read-mio-message lists under Attachments.'),
 });
 
 mcpServer.registerTool('get-mio-message-link',

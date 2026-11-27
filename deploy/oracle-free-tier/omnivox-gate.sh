@@ -30,6 +30,12 @@ RAW="https://raw.githubusercontent.com/Hamuthefreak/gotohp/$REF/deploy/oracle-fr
 GATE_USERNAME=${GATE_USERNAME:-2652532}
 CLOUDFLARED=${CLOUDFLARED:-/usr/local/bin/cloudflared}
 COMMAND=${COMMAND:-/usr/local/bin/omnivox-gate}
+# The quick tunnel's name changes on every start, so the name that is live right
+# now is written down where it can be read without remembering it: a plain URL
+# file, and a small endpoint file with the MCP URL and the tool count. Both are
+# rewritten on every tunnel start, by `install`, `status` and `url`.
+URL_FILE=${URL_FILE:-$PREFIX/public-url}
+ENDPOINT_FILE=${ENDPOINT_FILE:-$PREFIX/endpoint.txt}
 NEW_CODE=${NEW_CODE:-0}
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -212,6 +218,9 @@ Restart=always
 RestartSec=5
 MemoryMax=128M
 NoNewPrivileges=yes
+# The name is random and new on every start: write the live one down so nobody
+# has to remember it, or find it in a log, to reconnect.
+ExecStartPost=$COMMAND record-endpoint
 
 [Install]
 WantedBy=multi-user.target
@@ -239,6 +248,55 @@ public_url() {
 		url=$(grep -oE 'https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com' "$GATE_DIR/cloudflared.log" 2>/dev/null | tail -n 1 || true)
 	fi
 	echo "$url"
+}
+
+mcp_origin() { echo "${UPSTREAM%/}"; }
+
+# How many tools the MCP server answers with, asked on the box with its own
+# access key. Empty when the server is not up, so a status file never lies.
+tool_count() {
+	local key
+	key=$(cat "$PREFIX/data/accessKey.txt" 2>/dev/null || true)
+	[[ -n $key ]] || return 0
+	curl -fsS -m 15 -H "x-mcp-auth: $key" "$(mcp_origin)/tools" 2>/dev/null |
+		python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("tools", [])))' 2>/dev/null || true
+}
+
+write_endpoint() {
+	local url=${1:-$(public_url)} mcp='' count=''
+	[[ -n $url ]] && mcp="$url/mcp"
+	count=$(tool_count)
+	if [[ -n $url ]]; then
+		printf '%s\n' "$url" >"$URL_FILE"
+		chmod 0644 "$URL_FILE" 2>/dev/null || true
+	fi
+	{
+		printf '# Written by omnivox-gate. Rewritten whenever the tunnel starts.\n'
+		printf 'url=%s\n' "$url"
+		printf 'mcp=%s\n' "$mcp"
+		printf 'tools=%s\n' "${count:-unknown}"
+		printf 'updated=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	} >"$ENDPOINT_FILE"
+	chmod 0644 "$ENDPOINT_FILE" 2>/dev/null || true
+	echo "${url:-no url yet}"
+}
+
+# What the tunnel unit runs after cloudflared starts. A quick tunnel logs its new
+# name a moment after start, and the last name in the log is the old one until
+# then - so this waits for a log line written in the last two minutes before it
+# believes it, then records that.
+record_endpoint() {
+	local i url='' mtime now
+	for i in $(seq 1 20); do
+		url=$(public_url)
+		if [[ -n $url ]]; then
+			mtime=$(stat -c %Y "$GATE_DIR/cloudflared.log" 2>/dev/null || echo 0)
+			now=$(date +%s)
+			((now - mtime < 120)) && break
+		fi
+		sleep 1
+	done
+	write_endpoint "$url"
 }
 
 wait_tunnel() {
@@ -304,6 +362,11 @@ do_install() {
 	local url
 	if url=$(wait_tunnel); then
 		echo "$url"
+		# Written down as well as printed: the next deploy, restart or reboot
+		# changes the name, and this file is how it is found again.
+		write_endpoint "$url" >/dev/null
+		echo "endpoint: $url/mcp   ($(tool_count || true) tools)"
+		echo "written to: $ENDPOINT_FILE"
 	else
 		warn "no tunnel name yet; check: journalctl -u ovx-gate-tunnel -n 30"
 	fi
@@ -339,6 +402,11 @@ do_status() {
 	printf 'health:  %s\n' "$(curl -fsS "http://127.0.0.1:$PORT/healthz" 2>/dev/null || echo 'no answer')"
 	printf 'url:     %s\n' "${url:-not up yet}"
 	printf 'mcp:     %s\n' "${url:+$url/mcp}"
+	# Root, or anyone who can read the files: the same facts, from disk, so a
+	# restart that printed a new name into a log is not a lost endpoint.
+	write_endpoint "$url" >/dev/null 2>&1 || true
+	printf 'tools:   %s\n' "$(tool_count || true)"
+	printf 'endpoint file: %s\n' "$ENDPOINT_FILE"
 	printf 'password: %s\n' "$([[ -s $GATE_DIR/auth.json ]] && echo 'set' || echo 'not set yet')"
 	if [[ -s $GATE_DIR/auth.json ]]; then
 		printf 'setup:   closed (the password is set)\n'
@@ -444,6 +512,7 @@ case $CMD in
 install) do_install ;;
 status) do_status ;;
 url) public_url ;;
+record-endpoint) record_endpoint ;;
 code) do_code ;;
 token) do_token ;;
 reset-setup) do_reset_setup ;;

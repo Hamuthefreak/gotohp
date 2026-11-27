@@ -130,7 +130,9 @@ class Fake(BaseHTTPRequestHandler):
             self.reply(200, f'attachments\n- poster.pdf (application/pdf, 1 KB) - message: {MSG_ID}\n')
             return
         if name == 'read-mio-message':
-            self.reply(200, f'from: someone\nAttachments:\n- poster.pdf (application/pdf, 1 KB) [attachment_id: {ATT_ID}]\nbody: hi')
+            self.reply(200, f'# hello\n- From: someone\n- Date: Mon, Nov 24\n\n## Attachments\n'
+                            f'- poster.pdf (application/pdf, 1 KB) [attachment_id: {ATT_ID}]\n\n'
+                            '## Message\nPlease bring a non-perishable item to the food drive.')
             return
         if name == 'get-mio-message-link' and args.get('attachment_id') != ATT_ID:
             self.reply(400, f'Message {args.get("message_id")} has no attachment {args.get("attachment_id")}. It lists: poster.pdf ({ATT_ID}).')
@@ -200,6 +202,12 @@ class Fake(BaseHTTPRequestHandler):
         if name in TERM_TOOLS:
             self.reply(200, f'# {name}\n- term {args.get("term_id") or "(default)"}')
             return
+        if name == 'get-cancelled-classes':
+            # The shape this patch now prints: the flag and the array fields it
+            # read, so an empty list can be told apart from one read wrongly.
+            self.reply(200, '# Cancelled classes\nNo cancelled classes.\n'
+                            'Omnivox agrees: IndicateurAucunCoursAnnule is true (array fields: ListeAnnulationCours (0)).')
+            return
         if name in STATIC_TOOLS:
             self.reply(200, f'# {name}\n- nothing to show')
             return
@@ -218,11 +226,11 @@ class Fake(BaseHTTPRequestHandler):
         if name in WRITE:
             self.reply(400, 'no such message or folder')
             return
-        if mode == 'ghostfile' and name == 'get-document-link' and args.get('document_id') == 'DOC1':
+        if mode == 'ghostfile' and name == 'get-document-link' and args.get('document_id'):
             self.reply(200, f'File saved to: {downloads}/ghost.pdf')
             return
         if name == 'get-document-link':
-            if args.get('document_id') == 'DOC1':
+            if args.get('document_id') in ('DOC1', 'DOC2'):
                 out = downloads / 'lab-notes.pdf'
                 out.write_bytes(b'%PDF-1.4 fake document\n')
                 self.reply(200, f'File saved to: {out}')
@@ -233,9 +241,15 @@ class Fake(BaseHTTPRequestHandler):
             # The text, not a path: the whole point of the tool. The fake account
             # answers the ids its own listings print, for both sources the probe
             # calls it with.
-            if args.get('document_id') == 'DOC1' and args.get('source') == 'course-document':
+            if args.get('document_id') in ('DOC1', 'DOC2') and args.get('source') == 'course-document':
                 self.reply(200, '# lab-notes.pdf\napplication/pdf, 1 KB, 2 pages, pdf\n'
-                                'Source: course document DOC1\n\nLab 3: the answer is 720.')
+                                'Source: course document ' + str(args.get('document_id')) + '\n\n'
+                                'Question 1: the number of permutations is 720. '
+                                'Question 2: the proof follows from the induction hypothesis, '
+                                'written out step by step for full marks.')
+            elif args.get('source') == 'college-document' and args.get('document_id'):
+                self.reply(200, '# Request for a High School or University Pre-requisite Course\n'
+                                'Source: college document\n\nPlease see the attached document for more information.')
             elif args.get('attachment_id') == ATT_ID and args.get('source') == 'mio-attachment':
                 self.reply(200, '# poster.pdf\napplication/pdf, 1 KB, 1 page, pdf\n'
                                 'Source: attachment ' + ATT_ID + '\n\nPoster text.')
@@ -262,7 +276,10 @@ class Fake(BaseHTTPRequestHandler):
             'get-mio-messages': f'inbox\n## hello\n- From: someone\n- Attachments: poster.pdf\n- ID: {MSG_ID}\n',
             'get-mio-folders': 'INBOX\nSent',
             'get-course-assignments': '- ID: ASG1\n',
-            'get-course-documents': '- ID: DOC1\n',
+            'get-assignment-detail': '# Lab 3 [DUE IN 2d]\n- Due: Fri, Nov 28 23:59\n\n## Instructions\n'
+                                     'Prove by induction that the sum of the first n integers is n(n+1)/2. '
+                                     'Show every step, then compute it for n = 10.\n',
+            'get-course-documents': '## Course outline\n- ID: DOC1\n\n## Solutions to Test 2\n- ID: DOC2\n',
             'get-assignment-submit-link': 'File ID: F1 (role: teacher_document)\n',
             'read-mio-message': f'from: someone\nattachment_id: {ATT_ID}\nbody: hi\n',
             'search-mio-messages': 'no matches',
@@ -516,6 +533,7 @@ if not courses:
 
 # ---------------------------------------------------------------- course scoped
 documents = []
+document_names = {}
 assignments = []
 for course in courses:
     print(f'\ncourse {course}')
@@ -530,17 +548,34 @@ for course in courses:
         status, body, _ = call(name, {'course_id': course})
         if report(f'  {name}', status, body, limit=110):
             if name == 'get-course-documents':
+                # The document's own heading, kept with its id: the mission names
+                # one document (the Test 2 solutions), and a listing that is read
+                # without its titles cannot find it.
+                for block in re.split(r'\n## ', body)[1:]:
+                    found = re.search(r'^- ID: (\S+)$', block, re.M)
+                    if found:
+                        documents.append((course, found.group(1)))
+                        document_names[(course, found.group(1))] = block.split('\n', 1)[0].strip()
                 for doc in re.findall(r'^- ID: (\S+)$', body, re.M):
-                    documents.append((course, doc))
+                    if (course, doc) not in document_names and all(doc != d for _, d in documents):
+                        documents.append((course, doc))
             if name == 'get-course-assignments':
                 for aid in dict.fromkeys(re.findall(r'^- ID: (\S+)$', body, re.M)):
                     assignments.append((course, aid))
 
 # ---------------------------------------------------------------- assignment detail
 print()
-for course, aid in assignments[:3]:
+instructions = ''
+for course, aid in assignments[:6]:
     status, body, _ = call('get-assignment-detail', {'course_id': course, 'assignment_id': aid})
     report(f'get-assignment-detail {aid}', status, body, limit=110)
+    # The instructions are the reason this tool exists; an answer that stops at
+    # the deadline is the stub the mission is asking to close.
+    if not instructions and 200 <= status < 300 and '## Instructions' in body:
+        text = body.split('## Instructions', 1)[1].split('\n## ', 1)[0].strip()
+        if len(text) > 40:
+            instructions = text
+            print(f'{"  the instructions text":<46} {"":<4} {len(text)} characters: {" ".join(text.split())[:80]!r}')
     # This deployment serves files and runs without MCP_SERVER_URL, so the tool
     # is documented to refuse and say why. Assert that exact refusal: a silent
     # success would mean link mode turned on, which changes every download.
@@ -567,6 +602,10 @@ if assignments:
         'course_id': course, 'assignment_id': aid, 'file_id': BOGUS, 'role': 'teacher_document',
     })
     report('get-assignment-file-link (bogus)', status, body, expect_error=True, limit=110)
+
+if not instructions:
+    failures.append(('no assignment came back with instructions text', 0, f'{len(assignments[:6])} assignment(s) read'))
+    print(f'{"  the instructions text":<46} {"":<4} <-- FAIL (none of the assignments read has instructions)')
 
 # ---------------------------------------------------------------- documents
 print()
@@ -622,6 +661,42 @@ if documents:
     status, body, _ = call('read-document', {'source': 'course-document', 'course_id': course, 'document_id': BOGUS})
     report('read-document (bogus)', status, body, expect_error=True, limit=110)
 
+# The document the mission names: the Test 2 solutions. It is found by the title
+# its own listing prints, and it has to come back as text, not as "saved as".
+wanted = re.compile(r'test\s*2|test_2|test-2|solution|corrig', re.I)
+named = [(c, d) for c, d in documents if wanted.search(document_names.get((c, d), ''))]
+if named:
+    course, doc = named[0]
+    title = document_names.get((course, doc), doc)
+    print(f'{"document chosen":<46} {"":<4} {title[:90]}')
+    status, body, _ = call('read-document', {'source': 'course-document', 'course_id': course, 'document_id': doc})
+    report(f'read-document {title[:40]}', status, body, limit=120)
+    if 200 <= status < 300:
+        text = body.split('Source:', 1)[-1].split('\n', 1)[-1].strip() if 'Source:' in body else ''
+        if 'File saved to:' in body or len(text) < 120:
+            failures.append(('the Test 2 solutions did not come back as text', status, body[:400]))
+            print(f'{"  the solutions as text":<46} {"":<4} <-- FAIL ({len(text)} characters)')
+        else:
+            print(f'{"  the solutions as text":<46} {"":<4} {len(text)} characters of it: {" ".join(text.split())[:90]!r}')
+    else:
+        failures.append(('the Test 2 solutions could not be read', status, body[:300]))
+        print(f'{"  the solutions as text":<46} {"":<4} <-- FAIL ({status})')
+else:
+    failures.append(('no document listing names the Test 2 solutions', 0, f'{len(documents)} document(s) listed'))
+    print(f'{"document chosen":<46} {"":<4} <-- FAIL (no listing names a test/solutions document)')
+
+# Any other real document, read: a listing is not content either.
+for course, doc in documents[:6]:
+    if (course, doc) == (named[0] if named else (None, None)):
+        continue
+    status, body, _ = call('read-document', {'source': 'course-document', 'course_id': course, 'document_id': doc})
+    report(f'read-document (a second document)', status, body, limit=90)
+    if 200 <= status < 300 and 'File saved to:' not in body:
+        print(f'{"  it is text, not a path":<46} {"":<4} {document_names.get((course, doc), doc)[:70]}')
+        break
+    failures.append(('a second document did not come back as text', status, body[:200]))
+    print(f'{"  it is text, not a path":<46} {"":<4} <-- FAIL')
+
 # ---------------------------------------------------------------- mio
 print()
 # The ids as the listing writes them, with whatever separator it uses put back
@@ -642,6 +717,7 @@ if not message_ids:
 # Messages without an attachment are normal, so the probe reads messages until
 # one lists one. read-mio-message writes it as "[attachment_id: ...]".
 attachment = None
+message_body = ''
 read = 0
 # The inbox says which messages carry an attachment, which is exact where
 # scanning a body for an id depends on how that body is written.
@@ -665,6 +741,13 @@ for mid in [m for m in message_ids if V4.fullmatch(m)][:12]:
         report('read-mio-message', status, body, limit=110)
     elif not 200 <= status < 300:
         report('read-mio-message', status, body, limit=110)
+    # The body itself, which is what a reader asked for: a message that returns
+    # only its subject, sender and attachment list is a stub, not a message.
+    if not message_body and '## Message' in body:
+        text = body.split('## Message', 1)[1].strip()
+        if len(text) > 20 and '(empty body)' not in text:
+            message_body = text
+            print(f'{"  the message body":<46} {"":<4} {len(text)} characters: {" ".join(text.split())[:80]!r}')
     match = re.search(r'attachment_id: ([0-9A-Fa-f-]{8,})', body)
     if not match:
         print(f'{"  read " + mid: <46} {status:<4} {body[:80]}')
@@ -711,6 +794,10 @@ if attachment:
 else:
     failures.append(('read-mio-message had no attachment to test', 0, ''))
     print(f'{"get-mio-message-link":<46} {"":<4} <-- FAIL (no attachment id found)')
+
+if not message_body:
+    failures.append(('no MIO message came back with a body', 0, f'{read} message(s) read'))
+    print(f'{"  the message body":<46} {"":<4} <-- FAIL (every message read had an empty body)')
 
 for name, args in (
     ('search-mio-messages', {'query': 'vanier'}),
@@ -794,6 +881,21 @@ for name, args in (
         failures.append((answer, status, 'empty answer'))
         print(f'{"  it has something to say":<46} {"":<4} <-- FAIL (blank answer from a read that has one)')
 
+# Cancelled classes: "No cancelled classes." is only honest when Omnivox's own
+# flag agrees. The answer now carries that flag and the array fields it read, so
+# a list read from the wrong place can be told apart from a real "none".
+cancelled = ' '.join(harvest.get('get-cancelled-classes', '').split())
+if 'reading gap' in cancelled:
+    failures.append(('get-cancelled-classes read the wrong list', 200, cancelled[:400]))
+    print(f'{"  cancelled: the list is the right one":<44} {"":<4} <-- FAIL (Omnivox says cancellations exist)')
+elif 'No cancelled classes' in cancelled and 'array fields' in cancelled:
+    print(f'{"  cancelled: none, and Omnivox agrees":<44} {"":<4} {cancelled[len("# Cancelled classes"):][:110]!r}')
+elif cancelled.startswith('# Cancelled classes ('):
+    print(f'{"  cancelled: real entries came back":<44} {"":<4} {cancelled[:110]!r}')
+else:
+    failures.append(('get-cancelled-classes said nothing usable', 200, cancelled[:300]))
+    print(f'{"  cancelled: the list is the right one":<44} {"":<4} <-- FAIL (no flag, no entries)')
+
 # The upcoming schedule the mission asks for: the next seven days.
 if term:
     status, body, _ = call('get-schedule', {'term_id': term, 'days': 7})
@@ -876,6 +978,15 @@ if college:
             failures.append(('get-college-document-link (a notice) refused badly', status, body[:300]))
         elif len(' '.join(body.split())) < 20:
             failures.append(('get-college-document-link (a notice) came back empty', status, body[:300]))
+    # A college document read as text: the same file the link tool writes to
+    # disk, or the notice text Omnivox already holds - either way, content.
+    status, body, _ = call('read-document', {'source': 'college-document', 'document_id': college[0]})
+    report('read-document (college document)', status, body, limit=120)
+    if not 200 <= status < 300 or 'File saved to:' in body:
+        failures.append(('read-document (college document) did not come back as text', status, body[:300]))
+        print(f'{"  the college document as text":<46} {"":<4} <-- FAIL')
+    else:
+        print(f'{"  the college document as text":<46} {"":<4} {len(body)} characters, not a path')
 else:
     failures.append(('get-college-documents listed no id', 200, harvest['get-college-documents'][:200]))
     print(f'{"get-college-document-link":<46} {"":<4} <-- FAIL (no college document id to fetch)')
@@ -892,6 +1003,13 @@ if status == 200 and not any(word in body for word in ('entry', 'entries', 'Noth
     print(f'{"  it describes the window":<46} {"":<4} <-- FAIL')
 status, body, _ = call('get-upcoming-schedule', {'days': 14})
 report('get-upcoming-schedule (14 days)', status, body, limit=90)
+if status == 200 and not any(word in body for word in ('entry', 'entries', 'Nothing on the calendar')):
+    failures.append(('get-upcoming-schedule (14 days) said nothing about the window', status, body[:200]))
+    print(f'{"  it covers the next two weeks":<46} {"":<4} <-- FAIL')
+else:
+    print(f'{"  it covers the next two weeks":<46} {"":<4} {body.splitlines()[0][:70]!r}')
+status, body, _ = call('get-upcoming-schedule', {'days': 21})
+report('get-upcoming-schedule (21 days)', status, body, limit=90)
 
 # Every tool a server lists must be one this probe knows, so an upstream tool -
 # a write tool included - cannot slip in unaccounted for.

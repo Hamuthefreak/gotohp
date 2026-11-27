@@ -827,6 +827,54 @@ def add_tool_files(root: pathlib.Path) -> bool:
     return True
 
 
+CANCELLED_REL = 'src/mcp/tools/courses/cancelled.ts'
+
+# The empty-list branch, exactly as upstream writes it. A tool that says
+# "No cancelled classes." when Omnivox's own flag says otherwise is worse
+# than no tool: the reader believes it.
+CANCELLED_OLD = r'''        if (data.cancelled_classes.length === 0) {
+            return {
+                content: [{ type: 'text', text: '# Cancelled classes\nNo cancelled classes.' }],
+            };
+        }'''
+
+CANCELLED_NEW = r'''        if (data.cancelled_classes.length === 0) {
+            // Omnivox says whether it has cancellations at all. A list that is
+            // empty while that flag says cancellations exist means this list is
+            // being read from the wrong place - and "No cancelled classes." is
+            // the one answer that must never be wrong. So the flag and the array
+            // fields Omnivox actually sent are named in the answer.
+            const flag = (model as any)?.IndicateurAucunCoursAnnule;
+            const lists = Object.entries(model ?? {})
+                .filter(([, value]) => Array.isArray(value))
+                .map(([key, value]) => `${key} (${(value as any[]).length})`)
+                .join(', ');
+            if (flag === false) {
+                return {
+                    content: [{
+                        type: 'text',
+                        text: [
+                            '# Cancelled classes',
+                            'Omnivox reports that cancellations exist (IndicateurAucunCoursAnnule is false),',
+                            `but the list this tool reads came back empty. Array fields: ${lists || 'none'}.`,
+                            'That is a reading gap, not "no cancellations".',
+                        ].join('\n'),
+                    }],
+                };
+            }
+            return {
+                content: [{
+                    type: 'text',
+                    text: [
+                        '# Cancelled classes',
+                        'No cancelled classes.',
+                        `Omnivox agrees: ${flag === true ? 'IndicateurAucunCoursAnnule is true' : 'no cancellations listed'}` +
+                            ` (array fields: ${lists || 'none'}).`,
+                    ].join('\n'),
+                }],
+            };
+        }'''
+
 PACKAGE_JSON = 'package.json'
 # The PDF text extractor read-document uses: pure JS, no system package, no
 # browser. Kept in this patch for the same reason the tools are - fetch_source
@@ -864,6 +912,7 @@ def main() -> int:
     root = pathlib.Path(sys.argv[1])
     ok = add_tool_files(root)
     ok = add_pdf_reader(root) and ok
+    ok = patch_file(root / CANCELLED_REL, CANCELLED_OLD, CANCELLED_NEW, 'IndicateurAucunCoursAnnule is false', 'cancelled classes honesty') and ok
     # The name alone: "export function GetListeEvenement" is not found in the async
     # version this patch writes, so that marker appended a second copy each run.
     ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'GetListeEvenement', 'events list') and ok

@@ -566,9 +566,12 @@ for course in courses:
 # ---------------------------------------------------------------- assignment detail
 print()
 instructions = ''
-for course, aid in assignments[:6]:
+assignment_notes = []
+for course, aid in assignments[:20]:
     status, body, _ = call('get-assignment-detail', {'course_id': course, 'assignment_id': aid})
     report(f'get-assignment-detail {aid}', status, body, limit=110)
+    if 200 <= status < 300:
+        assignment_notes.append((aid, body))
     # The instructions are the reason this tool exists; an answer that stops at
     # the deadline is the stub the mission is asking to close.
     if not instructions and 200 <= status < 300 and '## Instructions' in body:
@@ -604,8 +607,15 @@ if assignments:
     report('get-assignment-file-link (bogus)', status, body, expect_error=True, limit=110)
 
 if not instructions:
-    failures.append(('no assignment came back with instructions text', 0, f'{len(assignments[:6])} assignment(s) read'))
-    print(f'{"  the instructions text":<46} {"":<4} <-- FAIL (none of the assignments read has instructions)')
+    # An honest "Omnivox keeps no description text for this assignment" is an
+    # answer; silence is not. Only the silent case is a failure.
+    stated = [aid for aid, note in assignment_notes if 'no description text' in note]
+    if stated:
+        print(f'{"  the instructions text":<46} {"":<4} GAP: none of {len(assignment_notes)} assignment(s) carries description text, '
+              f'and {len(stated)} of them say so by name')
+    else:
+        failures.append(('no assignment came back with instructions text', 0, f'{len(assignment_notes)} assignment(s) read'))
+        print(f'{"  the instructions text":<46} {"":<4} <-- FAIL (none read, and none says why)')
 
 # ---------------------------------------------------------------- documents
 print()

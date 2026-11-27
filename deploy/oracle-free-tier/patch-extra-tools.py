@@ -776,6 +776,28 @@ def patch_file(path: pathlib.Path, anchor: str, addition: str, marker: str, labe
     return True
 
 
+def replace_block(path: pathlib.Path, old: str, new: str, marker: str, label: str) -> bool:
+    """Replaces a block of an upstream file, rather than inserting one beside it.
+
+    patch_file prepends an addition (right for a function that must be defined
+    before its caller). A branch of existing code is not that: inserting a copy
+    next to it declares the same names twice, so the old block is taken out.
+    """
+    if not path.is_file():
+        print(f'{label}: {path} is missing, upstream moved it', file=sys.stderr)
+        return False
+    src = path.read_text()
+    if marker in src:
+        print(f'{label}: already applied')
+        return True
+    if old not in src:
+        print(f'{label}: anchor not found, patch NOT applied', file=sys.stderr)
+        return False
+    path.write_text(src.replace(old, new, 1))
+    print(f'{label}: applied')
+    return True
+
+
 def append(path: pathlib.Path, addition: str, marker: str, label: str) -> bool:
     if not path.is_file():
         print(f'{label}: {path} is missing, upstream moved it', file=sys.stderr)
@@ -826,6 +848,34 @@ def add_tool_files(root: pathlib.Path) -> bool:
         print(f'tool {name}: written')
     return True
 
+
+ASSIGNMENT_REL = 'src/mcp/tools/courses/assignment-detail.ts'
+
+# The instructions block, exactly as upstream writes it: an empty description
+# printed nothing at all, which reads as "no instructions" whether or not one
+# was attached.
+ASSIGNMENT_OLD = r'''        const instructions = extractHtmlPreview(t.Enonce, 20_000);
+        if (instructions) lines.push('', '## Instructions', instructions);'''
+
+ASSIGNMENT_NEW = r'''        const instructions = extractHtmlPreview(t.Enonce, 20_000);
+        if (instructions) {
+            lines.push('', '## Instructions', instructions);
+        } else {
+            // Silence here looked exactly like an assignment with no
+            // instructions. Say what Omnivox actually sent, and whether the
+            // instructions are an attached file to read with read-document
+            // instead - so "none" can be told apart from "not read".
+            const attached = (t.ListeDocumentsTravail ?? []).filter((d: any) => d.NomFichier);
+            const sent = t.Enonce ? `${String(t.Enonce).length} characters that carry no text` : 'empty';
+            lines.push(
+                '',
+                '## Instructions',
+                `Omnivox has no description text for this assignment (Enonce is ${sent})` +
+                    (attached.length
+                        ? `; its instructions are ${attached.length} attached document(s), listed under Teacher documents below - read one with read-document, role teacher_document.`
+                        : ' and no instruction document is attached to it either.'),
+            );
+        }'''
 
 CANCELLED_REL = 'src/mcp/tools/courses/cancelled.ts'
 
@@ -912,7 +962,8 @@ def main() -> int:
     root = pathlib.Path(sys.argv[1])
     ok = add_tool_files(root)
     ok = add_pdf_reader(root) and ok
-    ok = patch_file(root / CANCELLED_REL, CANCELLED_OLD, CANCELLED_NEW, 'IndicateurAucunCoursAnnule is false', 'cancelled classes honesty') and ok
+    ok = replace_block(root / ASSIGNMENT_REL, ASSIGNMENT_OLD, ASSIGNMENT_NEW, 'carry no text', 'assignment instructions honesty') and ok
+    ok = replace_block(root / CANCELLED_REL, CANCELLED_OLD, CANCELLED_NEW, 'IndicateurAucunCoursAnnule is false', 'cancelled classes honesty') and ok
     # The name alone: "export function GetListeEvenement" is not found in the async
     # version this patch writes, so that marker appended a second copy each run.
     ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'GetListeEvenement', 'events list') and ok

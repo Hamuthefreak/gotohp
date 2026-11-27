@@ -147,6 +147,20 @@ const updateBlock = installer.slice(installer.indexOf('do_update()'), installer.
 if (/toolscheck \|\| warn/.test(updateBlock)) ok('an update runs the pre-flight and warns on failure');
 else no('an update runs the pre-flight and warns on failure');
 
+// The deploy ships the current patch and points the installer at it, so the
+// patch that runs has to be that file and never a copy left by an earlier
+// deploy - a cached copy kept every later fix from ever reaching the box.
+const shipped = fs.readFileSync(path.join(here, 'patch-extra-tools.py'), 'utf8');
+if (shipped.includes("'/Mobl/College/EvenementsWeb_GetFirstLoad'") && !shipped.includes("'/Mobl/College/ListeEvenement'")) {
+	ok('the shipped events patch asks for the endpoint the app uses');
+} else no('the shipped events patch asks for the endpoint the app uses');
+if (/apply_patch 'extra read tools' "\$\{EXTRA_PATCH_SOURCE:-\$PREFIX\/patches\/patch-extra-tools\.py\}" "\$EXTRA_PATCH_URL" "\$\{EXTRA_PATCH_SOURCE:-\}"/.test(installer)) {
+	ok('the installer prefers the shipped patch over its cached copy');
+} else no('the installer prefers the shipped patch over its cached copy');
+const applyBlock = installer.slice(installer.indexOf('apply_patch()'), installer.indexOf('\n}\n', installer.indexOf('apply_patch()')));
+if (/\[\[ ! -s \$script \|\| -n \$\{4:-\} \]\]/.test(applyBlock)) ok('and refreshes a cached copy when a source is given');
+else no('and refreshes a cached copy when a source is given');
+
 console.log();
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

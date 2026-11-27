@@ -367,9 +367,9 @@ apply_upstream_patches() {
 	# See patch-download-guard.py and patch-mio-guard.py. The checkout is re-fetched
 	# on every install, so each guard has to be re-applied here instead of living
 	# in an edited file.
-	apply_patch 'download guard' "${PATCH_SOURCE:-$PREFIX/patches/patch-download-guard.py}" "$PATCH_URL"
-	apply_patch 'MIO guard' "${MIO_PATCH_SOURCE:-$PREFIX/patches/patch-mio-guard.py}" "$MIO_PATCH_URL"
-	apply_patch 'extra read tools' "${EXTRA_PATCH_SOURCE:-$PREFIX/patches/patch-extra-tools.py}" "$EXTRA_PATCH_URL"
+	apply_patch 'download guard' "${PATCH_SOURCE:-$PREFIX/patches/patch-download-guard.py}" "$PATCH_URL" "${PATCH_SOURCE:-}"
+	apply_patch 'MIO guard' "${MIO_PATCH_SOURCE:-$PREFIX/patches/patch-mio-guard.py}" "$MIO_PATCH_URL" "${MIO_PATCH_SOURCE:-}"
+	apply_patch 'extra read tools' "${EXTRA_PATCH_SOURCE:-$PREFIX/patches/patch-extra-tools.py}" "$EXTRA_PATCH_URL" "${EXTRA_PATCH_SOURCE:-}"
 }
 
 # A tool module that throws while it loads exits the whole server at startup (the
@@ -393,11 +393,17 @@ toolscheck() {
 apply_patch() {
 	local label=$1 script=$2 url=$3
 	say "patching the $label"
-	if [[ ! -s $script ]]; then
+	# An explicit source (the deploy ships the current patch and sets
+	# PATCH_SOURCE etc.) is used as given. The cached copy under $PREFIX/patches
+	# is only a fallback: keeping an old one would pin every future deploy to
+	# the patch it first downloaded, which is what silently kept a fixed tool
+	# sending the old request.
+	if [[ ! -s $script || -n ${4:-} ]]; then
 		install -d -m 0755 "$PREFIX/patches"
 		if ! curl -fsSL -H 'Cache-Control: no-cache' "$url" -o "$script"; then
 			warn "could not fetch the $label patch"
-			return 1
+			[[ -s $script ]] || return 1
+			warn "using the cached copy instead"
 		fi
 		chmod 0644 "$script"
 	fi

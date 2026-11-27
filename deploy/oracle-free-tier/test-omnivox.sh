@@ -315,7 +315,11 @@ has 'it saves the file the document points at' 'PathFichier' "$(cat "$ex_root/sr
 has 'the MIO attachment tool is added' 'get-mio-message-link' "$(cat "$ex_root/src/mcp/tools/extra/mio-message-link.ts" 2>/dev/null)"
 has 'it checks the pair before asking Omnivox' 'ResolveMioAttachment' "$(cat "$ex_root/src/mcp/tools/extra/mio-message-link.ts" 2>/dev/null)"
 has 'the campus events tool is added' 'get-campus-events' "$(cat "$ex_root/src/mcp/tools/extra/campus-events.ts" 2>/dev/null)"
-has 'the events list request is added' 'export function GetListeEvenement' "$(cat "$ex_root/src/omnivox-api/requests/College.ts")"
+has 'the events list request is added' 'export async function GetListeEvenement' "$(cat "$ex_root/src/omnivox-api/requests/College.ts")"
+# The endpoint Omnivox actually serves. The first version of this patch asked
+# for one that answers only an error page, and a box that ran it kept it.
+lacks 'it asks for the endpoint the app calendar uses, not one that 404s' "ListeEvenement'" "$(cat "$ex_root/src/omnivox-api/requests/College.ts")"
+has 'and an older copy of the request is replaced, not skipped' 'EvenementsWeb_GetFirstLoad' "$(cat "$ex_root/src/omnivox-api/requests/College.ts")"
 has 'a wrong attachment id names the ones that exist' 'has no attachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
 has 'the attachment itself is still fetched as before' 'export function GetMioAttachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
 has 'the pre-flight script is added' 'registered > 0' "$(cat "$ex_root/scripts/toolscheck.ts" 2>/dev/null)"
@@ -325,7 +329,7 @@ att=$(grep -c 'export function GetMioAttachment' "$ex_root/src/omnivox-api/reque
 ((att == 1)) && ok 'the attachment function is declared once' || no "the attachment function is declared once (found $att)"
 out2=$(python3 ./patch-extra-tools.py "$ex_root" 2>&1)
 has 'a second run is a no-op' 'events list: already applied' "$out2"
-events=$(grep -c 'export function GetListeEvenement' "$ex_root/src/omnivox-api/requests/College.ts")
+events=$(grep -c 'function GetListeEvenement' "$ex_root/src/omnivox-api/requests/College.ts")
 ((events == 1)) && ok 'the events request is added once' || no "the events request is added once (found $events)"
 printf 'export function Other() {\n    return 1;\n}\n' >"$ex_root/src/omnivox-api/requests/Mio.ts"
 rc=0

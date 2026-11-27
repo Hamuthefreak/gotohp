@@ -336,6 +336,25 @@ def append(path: pathlib.Path, addition: str, marker: str, label: str) -> bool:
         return False
     src = path.read_text()
     if marker in src:
+        # An earlier version of this patch shipped a call Omnivox does not
+        # serve. A box that ran it keeps the old function, so the one this
+        # patch defines replaces it instead of being skipped as applied.
+        wanted = addition[addition.index('export async function GetListeEvenement'):].rstrip()
+        start = src.find('export function GetListeEvenement')
+        if start == -1:
+            start = src.find('export async function GetListeEvenement')
+        end = src.find('\n}\n', start)
+        # The function may be the last thing in the file, with no newline after it.
+        tail = 3
+        if end == -1 and src.rstrip().endswith('}'):
+            end = src.rstrip().rfind('\n}')
+            tail = len(src) - end
+        if start != -1 and end != -1:
+            current = src[start:end + tail]
+            if current.rstrip() != wanted:
+                path.write_text(src[:start] + wanted + src[end + tail:])
+                print(f'{label}: replaced the older version')
+                return True
         print(f'{label}: already applied')
         return True
     path.write_text(src.rstrip() + '\n' + addition)
@@ -366,7 +385,9 @@ def main() -> int:
         return 2
     root = pathlib.Path(sys.argv[1])
     ok = add_tool_files(root)
-    ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'export function GetListeEvenement', 'events list') and ok
+    # The name alone: "export function GetListeEvenement" is not found in the async
+    # version this patch writes, so that marker appended a second copy each run.
+    ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'GetListeEvenement', 'events list') and ok
     ok = patch_file(root / MIO_REL, MIO_ANCHOR, MIO_GUARD, 'export async function ResolveMioAttachment', 'attachment guard') and ok
     ok = add_toolcheck_script(root) and ok
     return 0 if ok else 1

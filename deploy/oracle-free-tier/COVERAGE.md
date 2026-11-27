@@ -9,8 +9,8 @@ nothing invented.
 | Pin | Value |
 | --- | --- |
 | Live servers | `https://github.com/Beat-YT/omnivox-mcp` at `6164a1aa191424fa2d0c27836a44c0f5b89f8858` (`main`, depth 1), patched on the box by this repo's `patch-*.py` |
-| This repo at the moment of proof | `e865bae` (`fix(probe): prefer the test's own solutions over a practice sheet for it`) |
-| Deploy run | `45944882954`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
+| This repo at the moment of proof | `9c7c93c` (`fix(tools): stop counting a live tool as unverified, and pin a cancellation`) |
+| Deploy run | `45946293811`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
 | Live tool list | that run's own output, line `/tools answers 43 tools`, printed after the install step |
 | Per-tool evidence | the same job's probe output, and its ledger step: `coverage: 43 of 43 served tools, 33 live-confirmed, 10 unverified` |
 | Server with the extra tools | `d233cba` (college document link, MIO message link, campus events), `f1e5a4f` (upcoming schedule), `a93232c` (read document) |

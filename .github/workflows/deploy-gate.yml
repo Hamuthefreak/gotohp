@@ -135,11 +135,15 @@ jobs:
           # The tool list a client actually receives, read from outside every
           # script above: only the bytes the server answers on /tools, plus the
           # same fetch from an unreachable port to prove the check can fail.
+          # /tools needs the server's own access key, so the key is read on the
+          # box and passed in; it is never printed or sent to this runner.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'python3 - <<"PY"
-          import json, sys, urllib.request
+            'sudo -n python3 - "$(sudo -n cat /opt/omnivox-mcp/data/accessKey.txt)" <<"PY"
+          import json, sys, urllib.error, urllib.request
+          key = sys.argv[1]
           def tools(port):
-              with urllib.request.urlopen(f"http://127.0.0.1:{port}/tools", timeout=20) as r:
+              req = urllib.request.Request(f"http://127.0.0.1:{port}/tools", headers={"x-mcp-auth": key})
+              with urllib.request.urlopen(req, timeout=20) as r:
                   return json.load(r)
           served = sorted(t["name"] for t in tools(3000)["tools"])
           print(f"/tools answers {len(served)} tools")
@@ -157,6 +161,8 @@ jobs:
               sys.exit(1)
           except OSError:
               print("the same check fails on a closed port, so it can fail")
+          except urllib.error.HTTPError as err:
+              print(f"the same check fails when the key is refused ({err.code})")
           PY'
 
           # The probe is only evidence if it can fail: run its self-test, which

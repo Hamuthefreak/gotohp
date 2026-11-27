@@ -700,10 +700,21 @@ if documents:
 # its own listing prints, and it has to come back as text, not as "saved as".
 wanted = re.compile(r'test\s*2|test_2|test-2|solution|corrig', re.I)
 named = [(c, d) for c, d in documents if wanted.search(document_names.get((c, d), ''))]
-# "Test 2" is the document the mission names; a solutions worksheet is only the
-# fallback when this account's listing has no Test 2 at all.
-test2 = [(c, d) for c, d in named if re.search(r'test\s*2|test_2|test-2', document_names.get((c, d), ''), re.I)]
-named = test2 + [pair for pair in named if pair not in test2]
+
+def how_close(pair):
+    # What the mission names is a Test 2 *solutions* document: a title that says
+    # both wins over one that says either, and a topic list is not solutions.
+    title = document_names.get(pair, '')
+    score = 0
+    if re.search(r'solution|corrig|answer', title, re.I):
+        score += 2
+    if re.search(r'test\s*2|test_2|test-2|\btest\b', title, re.I):
+        score += 2
+    return -score
+
+named.sort(key=how_close)
+if named[:5]:
+    print(f'{"documents matching test/solutions":<46} {"":<4} {"; ".join(document_names.get(p, p[1])[:40] for p in named[:5])}')
 if named:
     course, doc = named[0]
     title = document_names.get((course, doc), doc)

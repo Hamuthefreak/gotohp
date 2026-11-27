@@ -390,8 +390,41 @@ def main() -> int:
     ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'GetListeEvenement', 'events list') and ok
     ok = patch_file(root / MIO_REL, MIO_ANCHOR, MIO_GUARD, 'export async function ResolveMioAttachment', 'attachment guard') and ok
     ok = add_toolcheck_script(root) and ok
+    ok = add_entry_hook(root) and ok
     return 0 if ok else 1
 
+
+
+PASS_THROUGH_FLAGS = '''
+# `npm start -- --kill-others-on-fail`: npm hands its own extra arguments to
+# `tsx`, not to the server, so a unit that passes one would either be ignored or
+# stop the server from starting. A launcher that understands it is not needed
+# here - npm's children already go with it in the unit's mixed cgroup - so the
+# flag is accepted and ignored, and `npm start -- <anything else>` still fails
+# loudly instead of starting a server that answers nothing.
+for (const flag of ['--kill-others-on-fail']) {
+    const at = process.argv.indexOf(flag);
+    if (at !== -1) process.argv.splice(at, 1);
+}
+'''
+
+ENTRY_FILE = 'src/index.ts'
+# A real line of the hook below, so a second run sees it and stops.
+ENTRY_MARKER = "process.argv.splice(at, 1)"
+
+
+def add_entry_hook(root: pathlib.Path) -> bool:
+    path = root / ENTRY_FILE
+    if not path.is_file():
+        print(f'entry hook: {path} is missing, upstream moved it', file=sys.stderr)
+        return False
+    src = path.read_text()
+    if ENTRY_MARKER in src:
+        print('entry hook: already applied')
+        return True
+    path.write_text(PASS_THROUGH_FLAGS.lstrip('\n') + '\n' + src)
+    print('entry hook: applied')
+    return True
 
 def add_toolcheck_script(root: pathlib.Path) -> bool:
     path = root / TOOLCHECK_FILE

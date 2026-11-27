@@ -300,12 +300,30 @@ fi
 BASE=${BASE:-http://127.0.0.1:3000}
 KEY_FILE=${KEY_FILE:-/opt/omnivox-mcp/data/accessKey.txt}
 DOWNLOADS=${DOWNLOADS:-/opt/omnivox-mcp/data/downloads}
+# The tools this deployment adds itself. If the server has not loaded them, the
+# probe is asking a process that is not running this checkout (an older one
+# still holding the port, say), and every answer below would describe that
+# process, not the one just installed.
+EXTRA_TOOLS=${EXTRA_TOOLS:-get-college-document-link get-mio-message-link get-campus-events}
 
 key=$(cat "$KEY_FILE" 2>/dev/null || true)
 [[ -n $key ]] || {
 	echo "no access key in $KEY_FILE" >&2
 	exit 1
 }
+
+served=$(curl -fsS -m 30 -H "x-mcp-auth: $key" "$BASE/tools" 2>/dev/null || true)
+for extra in $EXTRA_TOOLS; do
+	case "$served" in
+	*"\"$extra\""*) ;;
+	*)
+		echo "probe: $BASE does not serve $extra, so it is not running this checkout." >&2
+		echo 'probe: restart the unit (systemctl restart omnivox-mcp) and run it again.' >&2
+		echo "probe: it answered: ${served:0:200}" >&2
+		exit 1
+		;;
+	esac
+done
 
 python3 - "$BASE" "$key" "$DOWNLOADS" <<'PROBE'
 TOOLS = [

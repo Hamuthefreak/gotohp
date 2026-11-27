@@ -308,6 +308,9 @@ printf 'import { omnivox } from "../puppet";\n\nexport function GetListeActualit
 printf 'export function GetMioAttachment(messageId: string, attachmentId: string): Promise<DownloadResult> {\n    return fetchDownload(\`/Mobl/Mio/GetMioAttachment?\${messageId}\`, {});\n}\n' >"$ex_root/src/omnivox-api/requests/Mio.ts"
 printf 'import * as express from "express";\nconst router = express.Router();\nrouter.get("/tools", (a, b) => b.json({}));\nexport default router;\n' >"$ex_root/src/express/routes/tools.ts"
 printf 'const tool = 1;\n' >"$ex_root/src/mcp/tools/courses/documents.ts"
+# The server's entry point takes the unit's pass-through flag, so the fixture
+# needs one; the patch reports it missing rather than inventing a file.
+printf 'const x = 1;\n' >"$ex_root/src/index.ts"
 out=$(python3 ./patch-extra-tools.py "$ex_root" 2>&1)
 has 'the college document tool is added' 'get-college-document-link' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
 has 'it reads the document list the app already fetches' 'ListeDocumentsMessages?.ListeDocuments' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
@@ -323,6 +326,7 @@ has 'and an older copy of the request is replaced, not skipped' 'EvenementsWeb_G
 has 'a wrong attachment id names the ones that exist' 'has no attachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
 has 'the attachment itself is still fetched as before' 'export function GetMioAttachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
 has 'the pre-flight script is added' 'registered > 0' "$(cat "$ex_root/scripts/toolscheck.ts" 2>/dev/null)"
+has 'the unit flag is accepted by the server entry point' 'process.argv.splice(at, 1)' "$(cat "$ex_root/src/index.ts")"
 has 'it says what it applied' 'attachment guard: applied' "$out"
 # The guard must not add a second declaration of the function it anchors on.
 att=$(grep -c 'export function GetMioAttachment' "$ex_root/src/omnivox-api/requests/Mio.ts")

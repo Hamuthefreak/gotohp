@@ -165,7 +165,10 @@ User=$SVC_USER
 Group=$SVC_USER
 WorkingDirectory=$APP
 EnvironmentFile=$ENV_FILE
-ExecStart=/usr/bin/npm start
+# --kill-others-on-fail: if npm itself dies, take the server and Chrome with it
+# instead of leaving a child on the port that the next restart cannot bind -
+# which once left an old process answering while the new code never loaded.
+ExecStart=/usr/bin/npm start -- --kill-others-on-fail
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

@@ -414,10 +414,15 @@ ENTRY_MARKER = "process.argv.splice(at, 1)"
 
 
 def add_entry_hook(root: pathlib.Path) -> bool:
-    path = root / ENTRY_FILE
+    # The server's own file, where it is (upstream keeps it as src/index.js).
+    # The hook is optional: it lets the unit's pass-through flag be accepted, and
+    # a tree without an entry point here is reported, not treated as a failure
+    # that would stop an install from applying the tools that do exist.
+    found = [p for p in (root / ENTRY_FILE, root / 'src/index.js') if p.is_file()]
+    path = found[0] if found else root / ENTRY_FILE
     if not path.is_file():
-        print(f'entry hook: {path} is missing, upstream moved it', file=sys.stderr)
-        return False
+        print(f'entry hook: {path} is missing, upstream moved it (the flag will not be accepted)', file=sys.stderr)
+        return True
     src = path.read_text()
     if ENTRY_MARKER in src:
         print('entry hook: already applied')

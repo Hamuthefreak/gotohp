@@ -67,7 +67,13 @@ export async function GetCollegeDocumentFile(documentId: string) {
     if (!raw) {
         // Some entries are notices with no file at all: the listing marks them
         // by type, and there is nothing to fetch.
-        throw new Error(`College document ${documentId} has no file attached (${String(item.Titre ?? item.NomDocument ?? '').trim() || 'untitled'}; type ${item.TypeDocument ?? '?'}). Call get-college-documents for the ones that do.`);
+        // Every field that could carry the file, so an entry whose file hides
+        // under a name this code does not know says so instead of "no file".
+        const shape = Object.entries(item)
+            .filter(([key, value]) => value !== null && value !== '' && typeof value !== 'object' && /path|url|fich|file|doc|ext|type|titre|nom/i.test(key))
+            .map(([key, value]) => `${key}=${String(value).slice(0, 40)}`)
+            .join(' ');
+        throw new Error(`College document ${documentId} has no file attached (${String(item.Titre ?? item.NomDocument ?? '').trim() || 'untitled'}; ${shape || 'no file-like field at all'}). Call get-college-documents for the ones that do.`);
     }
 
     const page = await omnivox.page();

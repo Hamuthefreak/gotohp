@@ -714,6 +714,10 @@ def how_close(pair):
         score += 5
     elif re.search(r'\btest\b', title, re.I):
         score += 2
+    # The account lists both "Solutions to Test 2" and "Solutions to Practice
+    # Problems for Test 2": the test's own solutions are the ones asked for.
+    if re.search(r'practice|worksheet|sample', title, re.I):
+        score -= 2
     return -score
 
 named.sort(key=how_close)

@@ -55,6 +55,7 @@ WRITE = {
 }
 # A v4, because read-mio-message refuses anything else before it reaches
 # Omnivox; the probe only reads ids of this shape.
+NOTICE_ID = '44444444-4444-4444-8444-444444444444'
 MSG_ID = '11111111-1111-4111-8111-111111111111'
 ATT_ID = '22222222-2222-4222-8222-222222222222'
 TERM_TOOLS = {
@@ -144,12 +145,16 @@ class Fake(BaseHTTPRequestHandler):
         if name == 'get-college-documents':
             # The list its own file tool reads back from: same shape as the live
             # answer, so a broken list would leave the link tool without an id.
-            self.reply(200, '# College documents (1)\n\n## Registrar guide\n- File: PDF, 46 KB\n- ID: 33333333-3333-4333-8333-333333333333')
+            self.reply(200, '# College documents (2)\n\n## Registrar guide\n- File: PDF, 46 KB\n- ID: 33333333-3333-4333-8333-333333333333\n'
+                        '\n## Request for a High School or University Pre-requisite Course\n- Extention: PDF\n- ID: ' + NOTICE_ID)
             return
         if name == 'get-college-document-link' and args.get('document_id') == '33333333-3333-4333-8333-333333333333':
             out = downloads / 'registrar-guide.pdf'
             out.write_bytes(b'%PDF-1.4 registrar\n')
             self.reply(200, f'File saved to: {out}')
+            return
+        if name == 'get-college-document-link' and args.get('document_id') == NOTICE_ID:
+            self.reply(500, f'College document {NOTICE_ID} has no file attached (Request for a High School or University Pre-requisite Course; Extention=PDF IDDocument={NOTICE_ID}). Call get-college-documents for the ones that do.')
             return
         if name == 'get-college-document-link':
             self.reply(400, f'No college document with id {args.get("document_id")}. Call get-college-documents for the current list.')
@@ -754,11 +759,17 @@ for name in (
 # block: a loose match paired a notice's id with an earlier document's file and
 # asked for a document that has no file at all.
 college = []
+# A notice the college lists without a file, if the listing has one: fetching it
+# has to be a clear refusal that names the notice, never a wrong file.
+notice = None
 for block in re.split(r'\n## ', raw.get('get-college-documents', harvest['get-college-documents'])):
+    found = re.search(r'- ID: ([0-9a-fA-F-]{36})', block)
+    if not found:
+        continue
     if '- File:' in block:
-        found = re.search(r'- ID: ([0-9a-fA-F-]{36})', block)
-        if found:
-            college.append(found.group(1))
+        college.append(found.group(1))
+    elif notice is None and block.strip():
+        notice = found.group(1)
 if college:
     started = time.time()
     status, body, _ = call('get-college-document-link', {'document_id': college[0]})
@@ -776,6 +787,11 @@ if college:
         print(f'{"  it saved the file":<46} {"":<4} <-- FAIL (reported {saved})')
     status, body, _ = call('get-college-document-link', {'document_id': BOGUS_UUID})
     report('get-college-document-link (bogus)', status, body, expect_error=True, limit=110)
+    if notice:
+        status, body, _ = call('get-college-document-link', {'document_id': notice})
+        report('get-college-document-link (a notice)', status, body, expect_error=True, limit=110)
+        if 200 <= status < 300 or 'no file attached' not in body:
+            failures.append(('get-college-document-link (a notice) refused badly', status, body[:300]))
 else:
     failures.append(('get-college-documents listed no id', 200, harvest['get-college-documents'][:200]))
     print(f'{"get-college-document-link":<46} {"":<4} <-- FAIL (no college document id to fetch)')

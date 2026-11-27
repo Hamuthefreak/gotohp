@@ -145,8 +145,10 @@ class Fake(BaseHTTPRequestHandler):
         if name == 'get-college-documents':
             # The list its own file tool reads back from: same shape as the live
             # answer, so a broken list would leave the link tool without an id.
-            self.reply(200, '# College documents (2)\n\n## Registrar guide\n- File: PDF, 46 KB\n- ID: 33333333-3333-4333-8333-333333333333\n'
-                        '\n## Request for a High School or University Pre-requisite Course\n- Extention: PDF\n- ID: ' + NOTICE_ID)
+            self.reply(200, '# College documents (2)\n'
+                        '\n## Registrar guide\n- File: PDF, 46 KB\n- ID: 33333333-3333-4333-8333-333333333333\n'
+                        '\n## Request for a High School or University Pre-requisite Course\n'
+                        '- File: PDF, 100 KB\n- Extention: PDF\n- ID: ' + NOTICE_ID)
             return
         if name == 'get-college-document-link' and args.get('document_id') == '33333333-3333-4333-8333-333333333333':
             out = downloads / 'registrar-guide.pdf'
@@ -806,6 +808,12 @@ if college:
         st = None
     if st is not None and st.st_size > 0 and st.st_mtime >= started - 2:
         print(f'{"  it saved the file":<46} {"":<4} wrote {saved} ({st.st_size} bytes)')
+    elif 200 <= status < 300 and len(' '.join(body.split())) >= 20:
+        # A document Omnivox does not serve as a download: its text is the read,
+        # and the answer says nothing was opened.
+        print(f'{"  it read the document":<46} {"":<4} no download, so its text came back')
+        if 'nothing was opened' not in body:
+            failures.append(('get-college-document-link read without saying what it did', status, body[:300]))
     else:
         failures.append(('get-college-document-link saved nothing', status, str(saved)))
         print(f'{"  it saved the file":<46} {"":<4} <-- FAIL (reported {saved})')

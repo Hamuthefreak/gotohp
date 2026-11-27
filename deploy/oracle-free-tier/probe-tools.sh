@@ -154,7 +154,11 @@ class Fake(BaseHTTPRequestHandler):
             self.reply(200, f'File saved to: {out}')
             return
         if name == 'get-college-document-link' and args.get('document_id') == NOTICE_ID:
-            self.reply(500, f'College document {NOTICE_ID} has no file attached (Request for a High School or University Pre-requisite Course; Extention=PDF IDDocument={NOTICE_ID}). Call get-college-documents for the ones that do.')
+            # A notice whose file Omnivox does not serve: the text it already
+            # holds comes back instead, and nothing is opened.
+            self.reply(200, f'# Request for a High School or University Pre-requisite Course\n'
+                            f'File: The_CRUM_List_annoucement.pdf (PDF (100 KB)) - the college does not serve this one as a download, so no file was fetched and nothing was opened.\n\n'
+                            f'Please see the attached document for more information.')
             return
         if name == 'get-college-document-link':
             self.reply(400, f'No college document with id {args.get("document_id")}. Call get-college-documents for the current list.')
@@ -809,9 +813,14 @@ if college:
     report('get-college-document-link (bogus)', status, body, expect_error=True, limit=110)
     if notice:
         status, body, _ = call('get-college-document-link', {'document_id': notice})
-        report('get-college-document-link (a notice)', status, body, expect_error=True, limit=110)
-        if 200 <= status < 300 or 'no file attached' not in body:
+        report('get-college-document-link (a notice)', status, body, limit=110)
+        # Either its text comes back (Omnivox holds it and serves no file) or it
+        # says by name that there is no text at all: an empty answer for a listed
+        # notice is how a document silently went missing.
+        if not 200 <= status < 300:
             failures.append(('get-college-document-link (a notice) refused badly', status, body[:300]))
+        elif len(' '.join(body.split())) < 20:
+            failures.append(('get-college-document-link (a notice) came back empty', status, body[:300]))
 else:
     failures.append(('get-college-documents listed no id', 200, harvest['get-college-documents'][:200]))
     print(f'{"get-college-document-link":<46} {"":<4} <-- FAIL (no college document id to fetch)')

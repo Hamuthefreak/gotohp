@@ -71,6 +71,23 @@ export async function GetCollegeDocumentFile(documentId: string) {
     }
 
     const raw: string = item.PathFichier ?? item.UrlFichier ?? item.Url ?? '';
+    if (!raw.trim() && String(item.NomDocument ?? '').trim()) {
+        // Omnivox fills these in already: the text, the file name, the type and
+        // size. Nothing is opened in the portal to read them, which matters
+        // because opening a document is recorded on the student file.
+        const text = [item.Description, item.Commentaire].map((v) => String(v ?? '').trim()).filter(Boolean).join(String.fromCharCode(10, 10));
+        const size = Number(item.TailleOctet) > 0 ? ` (${Math.round(Number(item.TailleOctet) / 1024)} KB)` : '';
+        return {
+            url: '',
+            filename: String(item.NomDocument).trim(),
+            contentType: item.ContentType || 'application/octet-stream',
+            contentDisposition: `attachment; filename="${String(item.NomDocument).trim()}"`,
+            text,
+            title: String(item.Titre ?? '').trim() || String(item.NomDocument).trim(),
+            type: String(item.Extention ?? '').toUpperCase(),
+            size,
+        };
+    }
     if (!raw) {
         // Some entries are notices with no file at all: the listing marks them
         // by type, and there is nothing to fetch.
@@ -121,7 +138,20 @@ mcpServer.registerTool('get-college-document-link',
             };
         }
 
-        const file = await GetCollegeDocumentFile(args.document_id);
+        const file: any = await GetCollegeDocumentFile(args.document_id);
+        if (!file.url) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: [
+                        `# ${file.title}`,
+                        `File: ${file.filename} (${file.type}${file.size}) - the college does not serve this one as a download, so no file was fetched and nothing was opened.`,
+                        '',
+                        file.text || 'Omnivox has no text for this document.',
+                    ].join(String.fromCharCode(10)),
+                }],
+            };
+        }
         const saved = await saveDownload(file as any, `${args.document_id}.bin`);
         return {
             content: [{ type: 'text', text: `File saved to: ${saved}` }],

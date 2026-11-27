@@ -791,7 +791,9 @@ for at, doc_id in id_at.items():
 if college:
     started = time.time()
     status, body, _ = call('get-college-document-link', {'document_id': college[0]})
-    report('get-college-document-link', status, body, limit=110)
+    # Printed whole: when a fetch is refused, why it was refused is the only
+    # thing that says what the tool still does not read.
+    report('get-college-document-link', status, body, limit=2000)
     match = re.search(r'File saved to: (\S+)', body)
     saved = Path(match.group(1)) if match else None
     try:

@@ -9,11 +9,11 @@ nothing invented.
 | Pin | Value |
 | --- | --- |
 | Live servers | `https://github.com/Beat-YT/omnivox-mcp` at `6164a1aa191424fa2d0c27836a44c0f5b89f8858` (`main`, depth 1), patched on the box by this repo's `patch-*.py` |
-| This repo at the moment of proof | `5626e22` (`fix(probe): stop asking for an attachments tool that does not exist`) |
-| Deploy run | `45927975590`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
-| Live tool list | that run's own output, line `/tools answers 42 tools`, printed after the install step |
-| Per-tool evidence | the same job's probe output, `74 answered, 15 rejected bad input, 42 of 42 tools exercised` |
-| Server with the extra tools | `d233cba` (college document link, MIO message link, campus events), `f1e5a4f` (upcoming schedule) |
+| This repo at the moment of proof | `a93232c` (`feat(omnivox): read a document's text instead of stopping at a saved path`) |
+| Deploy run | `45940490195`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
+| Live tool list | that run's own output, line `/tools answers 43 tools`, printed after the install step |
+| Per-tool evidence | the same job's probe output, `75 answered, 16 rejected bad input, 43 of 43 tools exercised` |
+| Server with the extra tools | `d233cba` (college document link, MIO message link, campus events), `f1e5a4f` (upcoming schedule), `a93232c` (read document) |
 
 The tool names below are transcribed from the `/tools` answer above, not from
 memory. `check-coverage.py` re-reads this file against any `/tools` answer and
@@ -69,6 +69,15 @@ reason says which. Tools are read-only unless the row says otherwise.
 | `get-assignment-submit-link` | `6164a1a` | probe `get-assignment-submit-link` | `500 says it needs MCP_SERVER_URL` | unverified: a URL builder that needs the public base URL, no Omnivox round trip is proven |
 | `get-course-announcements` | `6164a1a` | probe `get-course-announcements` for 6 courses | `200` 0, 22, 3, 0, 5 and 0 announcement(s) | live |
 
+### Reading a document's contents
+
+The `get-*-link` tools answer with a saved path or a 15 minute URL. `read-document`
+is the other half: the same file, fetched and read, so the text comes back.
+
+| Tool | Introduced | Exercised by | Observed | Verdict |
+| --- | --- | --- | --- | --- |
+| `read-document` | `a93232c` (this repo) | probe `read-document` on a real course document, and `read-document (bogus)` | `200 # F26_McIntyre_102-SWB_19.docx application/vnd…wordprocessingml.document, 88 KB, docx` and 24746 characters of its text, not a path; a wrong id answers `500 Omnivox answered with an error page` | live |
+
 ### Schedule, canceled classes, campus events
 
 | Tool | Introduced | Exercised by | Observed | Verdict |
@@ -105,12 +114,13 @@ reason says which. Tools are read-only unless the row says otherwise.
 | College documents | 5 | 4 | 1 |
 | MIO messages and attachments | 13 | 5 | 8 |
 | Assignments: list, detail and instructions | 6 | 4 | 2 |
+| Reading a document's contents | 1 | 1 | 0 |
 | Schedule, canceled classes, campus events | 5 | 5 | 0 |
 | Other existing read tools | 13 | 11 | 2 |
-| **Served tool set** | **42** | | |
+| **Served tool set** | **43** | | |
 
-The ledger holds 45 rows over the 42 served tools: three tools have a second row
-for the bogus-id path. 29 served tools are live-confirmed (27 answering data, 2
+The ledger holds 46 rows over the 43 served tools: three tools have a second row
+for the bogus-id path. 30 served tools are live-confirmed (28 answering data, 2
 answering an honest "none"), 13 are unverified, and every unverified one is a
 write tool refused before Omnivox, a bogus-id-only exercise, or a read the
 server keeps switched off.

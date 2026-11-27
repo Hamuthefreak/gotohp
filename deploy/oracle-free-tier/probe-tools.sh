@@ -231,10 +231,14 @@ class Fake(BaseHTTPRequestHandler):
             return
         if name == 'read-document':
             # The text, not a path: the whole point of the tool. The fake account
-            # answers the id its own document listing prints.
+            # answers the ids its own listings print, for both sources the probe
+            # calls it with.
             if args.get('document_id') == 'DOC1' and args.get('source') == 'course-document':
                 self.reply(200, '# lab-notes.pdf\napplication/pdf, 1 KB, 2 pages, pdf\n'
                                 'Source: course document DOC1\n\nLab 3: the answer is 720.')
+            elif args.get('attachment_id') == ATT_ID and args.get('source') == 'mio-attachment':
+                self.reply(200, '# poster.pdf\napplication/pdf, 1 KB, 1 page, pdf\n'
+                                'Source: attachment ' + ATT_ID + '\n\nPoster text.')
             else:
                 self.reply(400, f'document {args.get("document_id")} not found for source {args.get("source")}')
             return
@@ -347,7 +351,7 @@ DOWNLOADS=${DOWNLOADS:-/opt/omnivox-mcp/data/downloads}
 # probe is asking a process that is not running this checkout (an older one
 # still holding the port, say), and every answer below would describe that
 # process, not the one just installed.
-EXTRA_TOOLS=${EXTRA_TOOLS:-get-college-document-link get-mio-message-link get-campus-events get-upcoming-schedule}
+EXTRA_TOOLS=${EXTRA_TOOLS:-get-college-document-link get-mio-message-link get-campus-events get-upcoming-schedule read-document}
 
 key=$(cat "$KEY_FILE" 2>/dev/null || true)
 [[ -n $key ]] || {
@@ -693,6 +697,17 @@ if attachment:
     # Omnivox: the matrix below covers every wrong pair on the live account.
     status, body, _ = call('get-mio-message-link', {'message_id': mid, 'attachment_id': BOGUS_UUID})
     report('get-mio-message-link (bogus attachment)', status, body, expect_error=True, limit=110)
+    # The same attachment, read. A MIO poster or a solutions sheet is a PDF, and
+    # a path is not an answer to "what does it say".
+    status, body, _ = call('read-document', {'source': 'mio-attachment', 'message_id': mid, 'attachment_id': att})
+    report('read-document (mio attachment)', status, body, limit=110)
+    if 200 <= status < 300:
+        head = body.lstrip()
+        if 'File saved to:' in body or not head.startswith('#') or 'Source:' not in body:
+            failures.append(('read-document (mio attachment) did not come back as text', status, body[:300]))
+            print(f'{"  the attachment as text":<46} {"":<4} <-- FAIL')
+        else:
+            print(f'{"  the attachment as text":<46} {"":<4} {len(" ".join(body.split()))} characters, not a path')
 else:
     failures.append(('read-mio-message had no attachment to test', 0, ''))
     print(f'{"get-mio-message-link":<46} {"":<4} <-- FAIL (no attachment id found)')

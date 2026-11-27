@@ -312,6 +312,16 @@ printf 'const tool = 1;\n' >"$ex_root/src/mcp/tools/courses/documents.ts"
 # needs one; the patch reports it missing rather than inventing a file.
 printf 'const x = 1;\n' >"$ex_root/src/index.ts"
 out=$(python3 ./patch-extra-tools.py "$ex_root" 2>&1)
+(( $? == 0 )) && ok 'the patch exits 0 on a tree it touched' || no 'the patch exits 0 on a tree it touched'
+# A patched module with its entry point renamed away is still a patched tree, and
+# a patch that exits non-zero there fails the whole deploy after doing its work.
+rm -f "$ex_root/src/index.js"
+mv "$ex_root/src/index.ts" "$ex_root/src/main.ts"
+rc=0
+python3 ./patch-extra-tools.py "$ex_root" >/dev/null 2>&1 || rc=$?
+((rc == 0)) && ok 'a tree with no entry point at the known names is not a failure' \
+    || no 'a tree with no entry point at the known names is not a failure (exit '$rc')'
+mv "$ex_root/src/main.ts" "$ex_root/src/index.ts"
 has 'the college document tool is added' 'get-college-document-link' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
 has 'it reads the document list the app already fetches' 'ListeDocumentsMessages?.ListeDocuments' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
 has 'it saves the file the document points at' 'PathFichier' "$(cat "$ex_root/src/mcp/tools/extra/college-document-link.ts" 2>/dev/null)"
@@ -332,6 +342,7 @@ has 'it says what it applied' 'attachment guard: applied' "$out"
 att=$(grep -c 'export function GetMioAttachment' "$ex_root/src/omnivox-api/requests/Mio.ts")
 ((att == 1)) && ok 'the attachment function is declared once' || no "the attachment function is declared once (found $att)"
 out2=$(python3 ./patch-extra-tools.py "$ex_root" 2>&1)
+(( $? == 0 )) && ok 'and the second run exits 0 too' || no 'and the second run exits 0 too'
 has 'a second run is a no-op' 'events list: already applied' "$out2"
 events=$(grep -c 'function GetListeEvenement' "$ex_root/src/omnivox-api/requests/College.ts")
 ((events == 1)) && ok 'the events request is added once' || no "the events request is added once (found $events)"
@@ -346,6 +357,13 @@ rm -rf "$ex_root"
 installer=$(cat "$SELF" 2>/dev/null || cat ./omnivox-mcp.sh)
 has 'the installer applies the extra tools patch' 'patch-extra-tools.py' "$installer"
 has 'the installer checks every tool module before shipping' 'toolscheck || warn' "$installer"
+# The deploy dies with only "exit code 1" unless the patch's own output and its
+# status are echoed, and a leftover server answering for old code has to go first.
+has 'the installer echoes a patch exit code' 'patch: exit' "$installer"
+has 'the installer runs a shipped patch from the shipped path' 'script=$shipped' "$installer"
+has 'the installer stops a leftover server before patching' 'free_port' "$installer"
+has 'update stops it before it touches the checkout' \
+    "$(printf 'do_update() {\n\t# Before anything is written' | head -2 | tail -1)" "$installer"
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"

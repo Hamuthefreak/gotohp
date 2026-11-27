@@ -394,14 +394,18 @@ toolscheck() {
 }
 
 apply_patch() {
-	local label=$1 script=$2 url=$3
+	local label=$1 script=$2 url=$3 shipped=${4:-} rc
 	say "patching the $label"
 	# An explicit source (the deploy ships the current patch and sets
 	# PATCH_SOURCE etc.) is used as given. The cached copy under $PREFIX/patches
 	# is only a fallback: keeping an old one would pin every future deploy to
 	# the patch it first downloaded, which is what silently kept a fixed tool
 	# sending the old request.
-	if [[ ! -s $script || -n ${4:-} ]]; then
+	if [[ -n $shipped && -s $shipped ]]; then
+		script=$shipped
+		printf 'source: %s\n' "$script"
+		printf 'sha256: %s\n' "$(sha256sum "$script" | cut -d' ' -f1)"
+	elif [[ ! -s $script ]]; then
 		install -d -m 0755 "$PREFIX/patches"
 		if ! curl -fsSL -H 'Cache-Control: no-cache' "$url" -o "$script"; then
 			warn "could not fetch the $label patch"
@@ -409,8 +413,43 @@ apply_patch() {
 			warn "using the cached copy instead"
 		fi
 		chmod 0644 "$script"
+		printf 'source: %s (cached)\n' "$script"
 	fi
-	python3 "$script" "$APP"
+	# The patch's own words and exit code belong in the deploy log: a step that
+	# only says "exit code 1" cannot be diagnosed from outside the box.
+	printf 'python3 %s %s\n' "$script" "$APP"
+	python3 "$script" "$APP" 2>&1 || rc=$?
+	rc=${rc:-0}
+	printf '%s patch: exit %s\n' "$label" "$rc"
+	return "$rc"
+}
+
+# Stops the unit, and only then the process that still answers on the port. A
+# replaced npm can leave its server child holding the port; the next start then
+# fails to bind while the old code keeps answering, which is how a probe came to
+# describe a build that had not been loaded.
+free_port() {
+	if [[ $(systemctl is-active omnivox-mcp.service 2>/dev/null || true) == active ]]; then
+		say "stopping the running server before it is patched"
+		systemctl stop omnivox-mcp.service || true
+	fi
+	local i
+	for i in $(seq 1 20); do
+		ss -Hltn "sport = :$PORT" 2>/dev/null | grep -q . || return 0
+		sleep 1
+	done
+	# Whatever still holds it after the unit is stopped is a leftover child.
+	local pids
+	pids=$(ss -Hltnp "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u)
+	if [[ -n $pids ]]; then
+		warn "port $PORT is still held by pid(s) $pids after stopping the unit; stopping them"
+		# shellcheck disable=SC2086
+		kill $pids 2>/dev/null || true
+		sleep 2
+	fi
+	ss -Hltn "sport = :$PORT" 2>/dev/null | grep -q . &&
+		warn "port $PORT is still busy; the new server may fail to bind"
+	return 0
 }
 
 do_install() {
@@ -464,6 +503,9 @@ EOF
 }
 
 do_update() {
+	# Before anything is written: a server left answering from the old checkout
+	# would be the one a health check and a probe describe.
+	free_port
 	fetch_source
 	npm_install
 	apply_upstream_patches

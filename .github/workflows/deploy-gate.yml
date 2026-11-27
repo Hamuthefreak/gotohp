@@ -132,6 +132,32 @@ jobs:
             'sudo -n env PUPPETEER_ROOT=/opt/omnivox-mcp/app GATE_BROWSER=http \
              bash /tmp/ovx-gate-ship/test-gate.sh'
 
+          # The tool list a client actually receives, read from outside every
+          # script above: only the bytes the server answers on /tools, plus the
+          # same fetch from an unreachable port to prove the check can fail.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'python3 - <<"PY"
+          import json, sys, urllib.request
+          def tools(port):
+              with urllib.request.urlopen(f"http://127.0.0.1:{port}/tools", timeout=20) as r:
+                  return json.load(r)
+          served = sorted(t["name"] for t in tools(3000)["tools"])
+          print(f"/tools answers {len(served)} tools")
+          for t in served:
+              print(f"  {t}")
+          missing = [n for n in ("get-college-document-link", "get-mio-message-link",
+                                 "get-campus-events") if n not in served]
+          if missing:
+              print(f"::error::the live server does not serve {missing}")
+              sys.exit(1)
+          try:
+              tools(1)
+              print("::error::the tool-list check read a port that must be closed")
+              sys.exit(1)
+          except OSError:
+              print("the same check fails on a closed port, so it can fail")
+          PY'
+
           # The probe is only evidence if it can fail: run its self-test, which
           # breaks a fake server three ways and demands a non-zero exit naming
           # the tool. Nothing is re-applied by hand; this ships with the deploy.
@@ -146,14 +172,26 @@ jobs:
             'sudo -n env TSX_PATH=/opt/omnivox-mcp/app/node_modules/.bin/tsx \
              node /tmp/ovx-gate-ship/test-toolscheck.mjs'
 
-          # Re-fetch the vendored MCP server and re-apply the download guard, so
-          # the patch survives an upstream update instead of living in an edited
-          # file that the next install would erase.
+          # Re-fetch the vendored MCP server and re-apply the guards and the
+          # extra read tools, so they survive an upstream update instead of
+          # living in an edited file that the next install would erase. The step
+          # stops the running unit first (a leftover child would answer for the
+          # old code), runs every patch from the file this job shipped, and
+          # leaves the patch's own output and the unit's journal in the log -
+          # a step that only says "exit code 1" cannot be diagnosed.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n env PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py \
-             MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py \
-             EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py \
-             bash /tmp/ovx-gate-ship/omnivox-mcp.sh update'
+            'set -o pipefail; sudo -n env PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py \
+               MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py \
+               EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py \
+               PS4="+ \${LINENO} " bash -x /tmp/ovx-gate-ship/omnivox-mcp.sh update 2>&1 \
+             | grep -v -E "^\+\+? +" | grep -v -E "^\s+(local|for|if|fi|return|then|else)" ;
+             rc=${PIPESTATUS[0]};
+             if [ $rc -ne 0 ]; then
+               echo "::error::the box update failed (exit $rc)"
+               sudo -n journalctl -u omnivox-mcp.service -n 40 --no-pager || true
+               sudo -n ls -la /opt/omnivox-mcp/app/src/mcp/tools/extra /opt/omnivox-mcp/app/src/index.* || true
+             fi
+             exit $rc'
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \
              bash /tmp/ovx-gate-ship/omnivox-gate.sh install"

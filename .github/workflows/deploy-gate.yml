@@ -22,6 +22,8 @@ on:
       - "deploy/oracle-free-tier/test-toolscheck.mjs"
       - "deploy/oracle-free-tier/test-gate.sh"
       - "deploy/oracle-free-tier/test-gate-browser.mjs"
+      - "deploy/oracle-free-tier/COVERAGE.md"
+      - "deploy/oracle-free-tier/check-coverage.mjs"
       - ".github/workflows/deploy-gate.yml"
   workflow_dispatch:
 
@@ -118,7 +120,15 @@ jobs:
             deploy/oracle-free-tier/patch-extra-tools.py \
             deploy/oracle-free-tier/test-toolscheck.mjs \
             deploy/oracle-free-tier/toolscheck-live.py \
+            deploy/oracle-free-tier/COVERAGE.md \
+            deploy/oracle-free-tier/check-coverage.mjs \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
+
+          # The coverage ledger is evidence about the server, not part of it, so
+          # it is checked here, against what is live on the box, and never gates
+          # the tool list. A drift is reported in this log.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'node /tmp/ovx-gate-ship/check-coverage.mjs' \
+            || echo "::warning::the coverage ledger does not match the live tool list; see COVERAGE.md"
 
           # Re-fetch the vendored MCP server and re-apply the guards and the
           # extra read tools, so they survive an upstream update instead of

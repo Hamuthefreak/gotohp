@@ -374,6 +374,11 @@ has 'the installer checks every tool module before shipping' 'toolscheck || warn
 has 'the installer echoes a patch exit code' 'patch: exit' "$installer"
 has 'the installer runs a shipped patch from the shipped path' 'script=$shipped' "$installer"
 has 'the installer stops a leftover server before patching' 'free_port' "$installer"
+# `update` used to stop the old server and then never start a new one, so the
+# served tool list stayed the build from before the update, with no error.
+has 'update installs the unit when the box runs one' 'running == 1 || -f $UNIT' "$installer"
+has 'and fails when the server does not come up' 'wait_health || {' "$installer"
+has 'and proves /tools answers after the update' '/tools' "$installer"
 has 'update stops it before it touches the checkout' \
     "$(printf 'do_update() {\n\t# Before anything is written' | head -2 | tail -1)" "$installer"
 

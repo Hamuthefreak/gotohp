@@ -502,17 +502,41 @@ do_install() {
 EOF
 }
 
+unit_running() {
+	systemctl is-active omnivox-mcp.service 2>/dev/null | grep -qx active
+}
+
 do_update() {
 	# Before anything is written: a server left answering from the old checkout
 	# would be the one a health check and a probe describe.
+	local running=0
+	unit_running && running=1
 	free_port
 	fetch_source
 	npm_install
 	apply_upstream_patches
 	say "tools"
 	toolscheck || warn "the MCP server will not serve until the tool module above is fixed"
-	install_unit
-	wait_health || true
+	# The unit is only installed here when this box already ran it: `update` used
+	# to leave a box without a unit, and a run that installs one has to be able to
+	# do it again. A box that has never been installed is not given a half one.
+	if [[ $running == 1 || -f $UNIT ]]; then
+		install_unit
+		# The server has to come up with the tools just written, and say on
+		# the port whether the build it loaded is this checkout's. A silent
+		# not-starting is what let an old process answer for a new build.
+		wait_health || {
+			warn "the server did not come up after the update"
+			return 1
+		}
+		say "tools registered"
+		local key
+		key=$(cat "$DATA/accessKey.txt" 2>/dev/null || true)
+		curl -fsS -m 20 -H "x-mcp-auth: $key" "http://127.0.0.1:$PORT/tools" >/dev/null 2>&1 ||
+			warn "the server answers but /tools refused the request"
+	else
+		warn "no unit on this box yet; run: omnivox-mcp install"
+	fi
 }
 
 do_session() {

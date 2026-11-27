@@ -120,41 +120,6 @@ jobs:
             deploy/oracle-free-tier/toolscheck-live.py \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
 
-          # The same suite against the shipped gate, on the box. The box's own
-          # Chrome cannot render the gate's page: on this build every
-          # navigation to it comes back detached, whichever mode it launches
-          # in, while a plain page from a local server renders. So the box runs
-          # the page checks over HTTP - the real responses, the shipped CSP,
-          # the script and stylesheet, and the session the gate accepts or
-          # refuses - and GitHub's runner clicks the same page through in Chrome
-          # in the job above. It uses its own throwaway gate and port, so the
-          # token the owner's dashboard shows is never rotated.
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n env PUPPETEER_ROOT=/opt/omnivox-mcp/app GATE_BROWSER=http \
-             bash /tmp/ovx-gate-ship/test-gate.sh'
-
-          # The tool list a client actually receives, read from outside every
-          # script above: the bytes the server answers on /tools, every name, and
-          # a second fetch against a closed port so the check is shown to fail.
-          # The key is read on the box and passed in the environment only.
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'KEY=$(sudo -n cat /opt/omnivox-mcp/data/accessKey.txt) sudo -n -E \
-               python3 /tmp/ovx-gate-ship/toolscheck-live.py'
-
-          # The probe is only evidence if it can fail: run its self-test, which
-          # breaks a fake server three ways and demands a non-zero exit naming
-          # the tool. Nothing is re-applied by hand; this ships with the deploy.
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n bash /tmp/ovx-gate-ship/probe-tools.sh --self-test'
-
-          # The tool-load pre-flight is the guard that keeps one broken module
-          # from taking the whole server down at startup, so it is proven on the
-          # box: a module that throws while loading must be named, a good tree
-          # must pass, and a duplicated module must be reported.
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'sudo -n env TSX_PATH=/opt/omnivox-mcp/app/node_modules/.bin/tsx \
-             node /tmp/ovx-gate-ship/test-toolscheck.mjs'
-
           # Re-fetch the vendored MCP server and re-apply the guards and the
           # extra read tools, so they survive an upstream update instead of
           # living in an edited file that the next install would erase. This
@@ -211,3 +176,38 @@ jobs:
           # looks at. Write tools are only called with impossible ids.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'sudo -n bash /tmp/ovx-gate-ship/probe-tools.sh'
+
+          # The same suite against the shipped gate, on the box. The box's own
+          # Chrome cannot render the gate's page: on this build every
+          # navigation to it comes back detached, whichever mode it launches
+          # in, while a plain page from a local server renders. So the box runs
+          # the page checks over HTTP - the real responses, the shipped CSP,
+          # the script and stylesheet, and the session the gate accepts or
+          # refuses - and GitHub's runner clicks the same page through in Chrome
+          # in the job above. It uses its own throwaway gate and port, so the
+          # token the owner's dashboard shows is never rotated.
+
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n env PUPPETEER_ROOT=/opt/omnivox-mcp/app GATE_BROWSER=http \
+             bash /tmp/ovx-gate-ship/test-gate.sh'
+
+          # The probe is only evidence if it can fail: run its self-test, which
+          # breaks a fake server three ways and demands a non-zero exit naming
+          # the tool. Nothing is re-applied by hand; this ships with the deploy.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n bash /tmp/ovx-gate-ship/probe-tools.sh --self-test'
+
+          # The tool-load pre-flight is the guard that keeps one broken module
+          # from taking the whole server down at startup, so it is proven on the
+          # box: a module that throws while loading must be named, a good tree
+          # must pass, and a duplicated module must be reported.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n env TSX_PATH=/opt/omnivox-mcp/app/node_modules/.bin/tsx \
+             node /tmp/ovx-gate-ship/test-toolscheck.mjs'
+
+          # The dashboard, through the installed command (what SETUP.md tells
+          # the operator to run), after the server it talks to is up to date.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \
+             bash /tmp/ovx-gate-ship/omnivox-gate.sh install"
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'sudo -n omnivox-gate status'

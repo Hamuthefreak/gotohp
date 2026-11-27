@@ -163,12 +163,16 @@ jobs:
           # leaves the patch's own output and the unit's journal in the log -
           # a step that only says "exit code 1" cannot be diagnosed.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'set -o pipefail; sudo -n env PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py \
-               MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py \
-               EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py \
-               PS4="+ \${LINENO} " bash -x /tmp/ovx-gate-ship/omnivox-mcp.sh update 2>&1 \
-             | grep -v -E "^\+\+? +" | grep -v -E "^\s+(local|for|if|fi|return|then|else)" ;
-             rc=${PIPESTATUS[0]};
+            'set -x; set -o pipefail
+             sudo -n /bin/bash -c "
+               export PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py
+               export MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py
+               export EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py
+               export PS4=\"+ \\${LINENO} \"
+               bash -x /tmp/ovx-gate-ship/omnivox-mcp.sh update 2>&1
+             " > /tmp/ovx-update.log 2>&1; rc=$?
+             grep -v -E "^\\+\\+? +" /tmp/ovx-update.log | tail -n +1 || true
+             echo "update exit: $rc"
              if [ $rc -ne 0 ]; then
                echo "::error::the box update failed (exit $rc)"
                sudo -n journalctl -u omnivox-mcp.service -n 40 --no-pager || true

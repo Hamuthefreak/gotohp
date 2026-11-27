@@ -408,6 +408,32 @@ MIO_GUARD = '''// An attachment id that is not part of the message used to reach
 // going to exist. The message itself already lists its attachments, so the pair is
 // checked here and a wrong one says what the message does have.
 export async function ResolveMioAttachment(messageId: string, attachmentId: string) {
+    const answer: any = await GetMessage(messageId);
+    // The attachments sit on the message itself (MioMessage.Attachements), which
+    // is the field upstream's own read-mio-message prints.
+    const message: any = answer?.MioMessage ?? answer?.Message ?? answer ?? {};
+    const files: any[] =
+        message?.Attachements ?? message?.ListeFichiersJoint ?? message?.ListeFichiers ?? message?.Fichiers ?? [];
+    const wanted = attachmentId.toLowerCase();
+    const match = files.find((file) =>
+        [file?.IDFichierAttachement, file?.IdFichierAttachement, file?.Id, file?.Guid].some(
+            (value) => String(value ?? '').toLowerCase() === wanted
+        )
+    );
+    if (!match) {
+        const listed = files
+            .map((file) => `${file?.NomFichier ?? file?.Nom ?? 'attachment'} (${file?.IdFichierAttachement ?? file?.IdFichier ?? 'no id'})`)
+            .join(', ');
+        throw new Error(
+            `Message ${messageId} has no attachment ${attachmentId}. It lists: ${listed || 'no attachments'}. ` +
+            'Attachment ids come from read-mio-message.'
+        );
+    }
+    return match;
+}
+
+'''
+MIO_GUARD_OLD = '''export async function ResolveMioAttachment(messageId: string, attachmentId: string) {
     const message: any = await GetMessage(messageId);
     const files: any[] =
         message?.ListeFichiersJoint ?? message?.ListeFichiers ?? message?.Fichiers ?? message?.ListeAttachements ?? [];
@@ -430,6 +456,7 @@ export async function ResolveMioAttachment(messageId: string, attachmentId: stri
 }
 
 '''
+
 
 # ---------------------------------------------------------------- toolscheck
 
@@ -559,7 +586,15 @@ def main() -> int:
     # The name alone: "export function GetListeEvenement" is not found in the async
     # version this patch writes, so that marker appended a second copy each run.
     ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'GetListeEvenement', 'events list') and ok
-    ok = patch_file(root / MIO_REL, MIO_ANCHOR, MIO_GUARD, 'export async function ResolveMioAttachment', 'attachment guard') and ok
+    # The first guard looked for the attachments on the envelope, where they are
+    # not (they sit on MioMessage.Attachements), so it refused every attachment
+    # a message really had. A box that ran it keeps that copy unless it is
+    # replaced here, not skipped by its marker.
+    mio = root / MIO_REL
+    if mio.is_file() and MIO_GUARD_OLD in mio.read_text():
+        mio.write_text(mio.read_text().replace(MIO_GUARD_OLD, '', 1))
+        print('attachment guard: the guard that read the wrong field removed')
+    ok = patch_file(root / MIO_REL, MIO_ANCHOR, MIO_GUARD, 'const message: any = answer?.MioMessage', 'attachment guard') and ok
     ok = add_toolcheck_script(root) and ok
     ok = add_entry_hook(root) and ok
     return 0 if ok else 1

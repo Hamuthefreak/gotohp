@@ -157,18 +157,24 @@ jobs:
 
           # Re-fetch the vendored MCP server and re-apply the guards and the
           # extra read tools, so they survive an upstream update instead of
-          # living in an edited file that the next install would erase. The step
-          # stops the running unit first (a leftover child would answer for the
-          # old code), runs every patch from the file this job shipped, and
-          # leaves the patch's own output and the unit's journal in the log -
-          # a step that only says "exit code 1" cannot be diagnosed.
+          # living in an edited file that the next install would erase. This
+          # runs before anything reads the live tool list: the assertion below
+          # applies to what this install produced, not to whatever the box was
+          # serving before. The update stops the running unit first (a leftover
+          # child would answer for the old code), runs every patch from the file
+          # this job shipped, and echoes them; a failed update fails the step
+          # with its own output, and there is no retry of a patch's own error.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'set -o pipefail; rc=0; sudo -n /bin/bash -c "
+            'set -o pipefail
+             sudo -n /bin/bash -c "
+               set -o pipefail
                export PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py
                export MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py
                export EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py
+               echo \"running: omnivox-mcp.sh update with the patches this job shipped\"
                bash /tmp/ovx-gate-ship/omnivox-mcp.sh update
-             " 2>&1 | tee /tmp/ovx-update.log || rc=$?
+             " 2>&1 | tee /tmp/ovx-update.log
+             rc=$?
              echo "update exit: $rc"
              if [ $rc -ne 0 ]; then
                echo "::error::the box update failed (exit $rc)"
@@ -176,19 +182,25 @@ jobs:
                sudo -n ls -la /opt/omnivox-mcp/app/src/mcp/tools/extra /opt/omnivox-mcp/app/src/index.* || true
              fi
              exit $rc'
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \
-             bash /tmp/ovx-gate-ship/omnivox-gate.sh install"
-          # Through the installed command, not the shipped path: this is what
-          # SETUP.md tells the operator to run, so the deploy proves it resolves.
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'sudo -n omnivox-gate status'
-          # The three read tools this deployment adds on top of upstream have to
-          # be in the served tool list, or the install silently lost the patch.
+
+          # The tools this deployment adds have to be in the served tool list,
+          # or the install silently lost the patch. Read from outside the
+          # install, after it ran, and never loosened: a tool that is missing
+          # fails here with the install's log above it.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'for t in get-college-document-link get-mio-message-link get-campus-events get-upcoming-schedule; do
                sudo -n grep -q "\b$t\b" /opt/omnivox-mcp/app/src/mcp/tools/extra/*.ts \
                  || { echo "::error::the extra read tool $t was not installed"; exit 1; }
              done; echo "extra read tools installed"'
+
+          # The tool list a client actually receives, read from outside every
+          # script above: the bytes the server answers on /tools, every name, and
+          # a second fetch against a closed port so the check is shown to fail.
+          # The key is read on the box and passed in the environment only.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'KEY=$(sudo -n cat /opt/omnivox-mcp/data/accessKey.txt) sudo -n -E \
+               python3 /tmp/ovx-gate-ship/toolscheck-live.py'
+
           # Drives the public URL end to end: health, setup redirect, tokenless
           # refusal, then a good and a bogus document download.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \

@@ -163,15 +163,12 @@ jobs:
           # leaves the patch's own output and the unit's journal in the log -
           # a step that only says "exit code 1" cannot be diagnosed.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'set -x; set -o pipefail
-             sudo -n /bin/bash -c "
+            'set -o pipefail; rc=0; sudo -n /bin/bash -c "
                export PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py
                export MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py
                export EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py
-               export PS4=\"+ \\${LINENO} \"
-               bash -x /tmp/ovx-gate-ship/omnivox-mcp.sh update 2>&1
-             " > /tmp/ovx-update.log 2>&1; rc=$?
-             grep -v -E "^\\+\\+? +" /tmp/ovx-update.log | tail -n +1 || true
+               bash /tmp/ovx-gate-ship/omnivox-mcp.sh update
+             " 2>&1 | tee /tmp/ovx-update.log || rc=$?
              echo "update exit: $rc"
              if [ $rc -ne 0 ]; then
                echo "::error::the box update failed (exit $rc)"

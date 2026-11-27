@@ -733,7 +733,10 @@ for name, args in (
     answer = f'{name} ({term})' if term and 'term_id' in args else name
     harvest[name.split(' ')[0]] = body
     raw[name.split(' ')[0]] = body
-    report(answer, status, body, limit=110)
+    # The college documents listing is the one this probe parses, so it is
+    # printed whole: a shape the parser does not expect has to be visible here,
+    # not guessed from the one line that happens to fit.
+    report(answer, status, body, limit=4000 if name.split(' ')[0] == 'get-college-documents' else 110)
     if status == 200 and name.split(' ')[0] in ACCOUNT_TOOLS and len(' '.join(body.split())) < 20:
         failures.append((answer, status, 'empty answer'))
         print(f'{"  it has something to say":<46} {"":<4} <-- FAIL (blank answer from a read that has one)')

@@ -20,7 +20,11 @@ What it adds
      some point with "Cannot access 'cacheDestandataire' before initialization".
      The installer runs this before restarting anything, so a broken build is
      reported instead of crash-looping.
-  3. A guard on MIO attachment ids: an attachment id that does not belong to the
+  3. `read-document`: the text inside a course document, an assignment file, a
+     MIO attachment or a college document, so a client reads the solutions
+     instead of holding a path it cannot open. It needs one dependency, which
+     this patch adds to package.json.
+  4. A guard on MIO attachment ids: an attachment id that does not belong to the
      message used to go to Omnivox anyway, which answered a bare 404 for an id
      that was never going to exist. Now the message's own attachment list decides,
      and the answer names what it does have.
@@ -28,6 +32,7 @@ What it adds
 Write tools are not touched: nothing here sends, moves, deletes or creates.
 """
 
+import json
 import pathlib
 import sys
 
@@ -399,6 +404,250 @@ export async function GetListeEvenement(count: number = 20) {
 }
 '''
 
+# The half the link tools were missing: the same file, read, instead of a path
+# on the server that a client cannot open. It needs one dependency (`unpdf`,
+# added to package.json below) and nothing else, and it never writes.
+READ_DOCUMENT = r'''import { GetDocumentFichier, GetEnonceTravailFichier, GetDepotTravailFichier, GetCopieCorrigeTravailFichier } from "@api/LeaDownload";
+import { GetMioAttachment, ResolveMioAttachment } from "@api/Mio";
+import { omnivox } from "../../../omnivox-api/puppet";
+import { getDefaultTermId } from "@common/omnivoxHelper";
+import { mcpServer } from "src/mcp/server";
+import { inflateRawSync } from "node:zlib";
+import { z } from "zod";
+import { GetCollegeDocumentFile } from "./college-document-link";
+
+// Upstream answers a document request with a path on the server (/or a 15 minute
+// link). A client that asks "what does Test 2 say" then holds a path it cannot
+// open, which is where reading a document used to stop. This tool is the other
+// half: it fetches the same file and returns the text inside it.
+
+const MAX_DEFAULT = 60_000;
+const MAX_HARD = 300_000;
+
+const input = z.object({
+    source: z.enum(['course-document', 'assignment-file', 'mio-attachment', 'college-document'])
+        .describe('Where the file lives: a Lea course document, an assignment file (teacher document, your submission or the correction), a MIO attachment, or a college document.'),
+    course_id: z.string().optional().describe('Course id, for source course-document or assignment-file.'),
+    document_id: z.string().optional().describe('Document id from get-course-documents (course-document) or get-college-documents (college-document).'),
+    assignment_id: z.string().optional().describe('Assignment id from get-course-assignments or get-assignment-detail.'),
+    file_id: z.string().optional().describe('File ID printed by get-assignment-detail, with its role.'),
+    role: z.enum(['teacher_document', 'submission', 'correction']).optional().describe('Which assignment file file_id is.'),
+    message_id: z.string().optional().describe('MIO message id from get-mio-messages or read-mio-message.'),
+    attachment_id: z.string().optional().describe('Attachment id read-mio-message lists under Attachments.'),
+    term_id: z.string().optional().describe('Term, when not the default one.'),
+    max_chars: z.number().int().min(1_000).max(MAX_HARD).optional()
+        .describe('How much of the text to return before saying it was cut (default 60000).'),
+});
+
+type Args = z.infer<typeof input>;
+
+const NEEDED: Record<Args['source'], (keyof Args)[]> = {
+    'course-document': ['course_id', 'document_id'],
+    'assignment-file': ['course_id', 'assignment_id', 'file_id', 'role'],
+    'mio-attachment': ['message_id', 'attachment_id'],
+    'college-document': ['document_id'],
+};
+
+const HOW: Record<Args['source'], string> = {
+    'course-document': 'Ids come from get-course-documents.',
+    'assignment-file': 'Ids and role come from get-assignment-detail.',
+    'mio-attachment': 'Ids come from read-mio-message, which lists each attachment with its id.',
+    'college-document': 'The id comes from get-college-documents.',
+};
+
+function check(args: Args) {
+    const missing = NEEDED[args.source].filter((key) => {
+        const value = args[key];
+        return value === undefined || String(value).trim() === '';
+    });
+    if (missing.length) {
+        throw new Error(`read-document needs ${missing.join(', ')} for source ${args.source}. ${HOW[args.source]}`);
+    }
+}
+
+// --- reading the bytes Omnivox streams
+async function bytes(file: any): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of file.body) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+}
+
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+const decodeEntities = (text: string) => text.replace(/&(#x?[0-9a-fA-F]+|[a-z]+);/g, (all, body: string) => {
+    if (body[0] === '#') {
+        const code = body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+        return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : all;
+    }
+    return ENTITIES[body.toLowerCase()] ?? all;
+});
+
+// .docx is a zip: the central directory says where word/document.xml is and how
+// it is packed, so a Word file is read without adding a second library.
+function zipEntries(buf: Buffer) {
+    let at = -1;
+    for (let i = buf.length - 22; i >= Math.max(0, buf.length - 66_000); i--) {
+        if (buf.readUInt32LE(i) === 0x06054b50) { at = i; break; }
+    }
+    if (at === -1) throw new Error('not a zip archive');
+    const count = buf.readUInt16LE(at + 10);
+    let at2 = buf.readUInt32LE(at + 16);
+    const entries = new Map<string, { method: number; compressed: number; localAt: number }>();
+    for (let i = 0; i < count; i++) {
+        if (buf.readUInt32LE(at2) !== 0x02014b50) break;
+        const method = buf.readUInt16LE(at2 + 10);
+        const compressed = buf.readUInt32LE(at2 + 20);
+        const nameLen = buf.readUInt16LE(at2 + 28);
+        const extraLen = buf.readUInt16LE(at2 + 30);
+        const commentLen = buf.readUInt16LE(at2 + 32);
+        const localAt = buf.readUInt32LE(at2 + 42);
+        entries.set(buf.toString('utf8', at2 + 46, at2 + 46 + nameLen), { method, compressed, localAt });
+        at2 += 46 + nameLen + extraLen + commentLen;
+    }
+    return {
+        read(name: string) {
+            const entry = entries.get(name);
+            if (!entry) return undefined;
+            const nameLen = buf.readUInt16LE(entry.localAt + 26);
+            const extraLen = buf.readUInt16LE(entry.localAt + 28);
+            const start = entry.localAt + 30 + nameLen + extraLen;
+            const raw = buf.subarray(start, start + entry.compressed);
+            return entry.method === 0 ? Buffer.from(raw) : inflateRawSync(raw);
+        },
+    };
+}
+
+const stripWordXml = (xml: string) => decodeEntities(xml
+    .replace(/<w:tab\s*\/>/g, '\t')
+    .replace(/<w:br\s*\/>/g, '\n')
+    .replace(/<\/w:p>/g, '\n')
+    .replace(/<[^>]+>/g, ''))
+    .replace(/\n{3,}/g, '\n\n');
+
+const htmlToPlain = (html: string) => decodeEntities(html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<\/(p|div|li|h[1-6]|tr|br)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[ \t]{2,}/g, ' '));
+
+type Extracted = { kind: string; text: string; pages?: number };
+
+async function extractText(buf: Buffer, filename: string, contentType: string): Promise<Extracted> {
+    const ext = (filename.match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase();
+    const type = (contentType || '').toLowerCase();
+    if (buf.subarray(0, 4).toString('latin1') === '%PDF' || ext === 'pdf' || type.includes('pdf')) {
+        // Loaded here, not at the top of the module: a dependency that cannot
+        // load should fail this one call with a message, not exit the server.
+        const { extractText: pdfText, getDocumentProxy } = await import('unpdf');
+        const pdf = await getDocumentProxy(new Uint8Array(buf));
+        const { totalPages, text } = await pdfText(pdf, { mergePages: true });
+        return { kind: 'pdf', pages: totalPages, text: String(text ?? '') };
+    }
+    if (buf.subarray(0, 2).toString('latin1') === 'PK' && (ext === 'docx' || type.includes('wordprocessingml'))) {
+        const body = zipEntries(buf).read('word/document.xml');
+        if (!body) throw new Error('this .docx carries no word/document.xml');
+        return { kind: 'docx', text: stripWordXml(body.toString('utf8')) };
+    }
+    const textual = ['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'html', 'htm', 'log', 'ics', 'vtt', 'srt', 'yml', 'yaml'].includes(ext)
+        || type.startsWith('text/') || type.includes('json') || type.includes('xml');
+    if (textual) {
+        const text = buf.toString('utf8');
+        const markup = ext === 'html' || ext === 'htm' || ext === 'xml' || type.includes('html') || type.includes('xml');
+        return { kind: 'text', text: markup ? htmlToPlain(text) : text };
+    }
+    return { kind: 'binary', text: '' };
+}
+
+const kb = (n: number) => `${Math.max(1, Math.round(n / 1024))} KB`;
+
+mcpServer.registerTool('read-document',
+    {
+        title: 'Read Document',
+        description: 'Read what a document says, as text, without a download link or a path on the server: a Lea course document, an assignment file (teacher document, your submission or the correction), a MIO attachment, or a college document. PDFs are extracted page by page, .docx is read too, and plain text, CSV, JSON, HTML and XML come back as they are. source plus that source\'s ids are all it needs, and a file whose format carries no text (an image, a scan, a .doc or .xls) says so instead of guessing. Fetching a Lea document marks it as read on Omnivox, exactly like get-document-link; nothing is sent, moved, deleted or acknowledged.',
+        inputSchema: input,
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+        },
+    },
+    async (args: Args) => {
+        check(args);
+        const term = args.term_id || await getDefaultTermId();
+
+        let file: any;
+        let label = '';
+
+        if (args.source === 'course-document') {
+            file = await GetDocumentFichier(args.course_id as string, args.document_id as string, term);
+            label = `course document ${args.document_id} (course ${args.course_id}, term ${term})`;
+        } else if (args.source === 'assignment-file') {
+            const role = args.role as 'teacher_document' | 'submission' | 'correction';
+            const fetch = role === 'submission' ? GetDepotTravailFichier
+                : role === 'correction' ? GetCopieCorrigeTravailFichier
+                    : GetEnonceTravailFichier;
+            file = await fetch(args.course_id as string, args.assignment_id as string, args.file_id as string, term);
+            label = `${role.replace('_', ' ')} of assignment ${args.assignment_id} (course ${args.course_id}, term ${term})`;
+        } else if (args.source === 'mio-attachment') {
+            // The message decides that the attachment is real, before Omnivox is asked.
+            await ResolveMioAttachment(args.message_id as string, args.attachment_id as string);
+            file = await GetMioAttachment(args.message_id as string, args.attachment_id as string);
+            label = `attachment ${args.attachment_id} of MIO message ${args.message_id}`;
+        } else {
+            const college: any = await GetCollegeDocumentFile(args.document_id as string);
+            label = `college document ${args.document_id}`;
+            if (!college.url) {
+                // Omnivox keeps the text itself for a notice it does not serve
+                // as a file: that text is the answer, and nothing is opened.
+                return {
+                    content: [{
+                        type: 'text',
+                        text: [`# ${college.title || college.filename}`, `Source: ${label}`, '', college.text || 'Omnivox has no text for this document.'].join('\n'),
+                    }],
+                };
+            }
+            file = await omnivox.download(college.url);
+            file.filename = file.filename || college.filename;
+            file.contentType = file.contentType || college.contentType;
+        }
+
+        const buf = await bytes(file);
+        const name = String(file.filename ?? `${args.document_id ?? args.file_id ?? args.attachment_id ?? 'document'}.bin`);
+        const type = String(file.contentType ?? 'application/octet-stream');
+        if (buf.length === 0) {
+            return { content: [{ type: 'text', text: `# ${name}\nSource: ${label}\n\nOmnivox answered with an empty file: nothing to read.` }] };
+        }
+
+        const found = await extractText(buf, name, type);
+        const limit = Math.min(args.max_chars ?? MAX_DEFAULT, MAX_HARD);
+        const text = found.text.replace(/\r\n/g, '\n').trim();
+        const head = [
+            `# ${name}`,
+            `${type}, ${kb(buf.length)}${found.pages ? `, ${found.pages} page${found.pages === 1 ? '' : 's'}` : ''}, ${found.kind}`,
+            `Source: ${label}`,
+            '',
+        ];
+
+        if (!text) {
+            const why = found.kind === 'pdf'
+                ? 'The PDF has no text layer: it is a scan or an image-only export, so the words are pixels and there is nothing to read here.'
+                : found.kind === 'binary'
+                    ? 'This format carries no text this server can read (an image, a .doc or .xls, an archive).'
+                    : 'The file came back empty.';
+            return {
+                content: [{
+                    type: 'text',
+                    text: [...head, why, 'The document itself is still there: the matching get-*-link tool returns the file (or a 15 minute link) if a reader that sees pages is needed.'].join('\n'),
+                }],
+            };
+        }
+
+        const cut = text.length > limit;
+        const body = cut ? `${text.slice(0, limit)}\n\n[... cut at ${limit} of ${text.length} characters; ask again with a larger max_chars for the rest]` : text;
+        return { content: [{ type: 'text', text: [...head, body].join('\n') }] };
+    }
+);
+'''
+
 # ---------------------------------------------------------------- MIO attachment guard
 
 MIO_ANCHOR = '''export function GetMioAttachment(messageId: string, attachmentId: string): Promise<DownloadResult> {'''
@@ -567,6 +816,7 @@ def add_tool_files(root: pathlib.Path) -> bool:
         ('mio-message-link.ts', MIO_MESSAGE_LINK),
         ('campus-events.ts', CAMPUS_EVENTS),
         ('upcoming-schedule.ts', UPCOMING_SCHEDULE),
+        ('read-document.ts', READ_DOCUMENT),
     ):
         path = target / name
         if path.is_file() and path.read_text() == body:
@@ -577,12 +827,43 @@ def add_tool_files(root: pathlib.Path) -> bool:
     return True
 
 
+PACKAGE_JSON = 'package.json'
+# The PDF text extractor read-document uses: pure JS, no system package, no
+# browser. Kept in this patch for the same reason the tools are - fetch_source
+# restores package.json on every deploy, so a dependency added by hand would be
+# gone by the next one - and the installer's npm install runs after this patch,
+# which is what fetches it.
+PDF_READER = ('unpdf', '^2.2.3')
+
+
+def add_pdf_reader(root: pathlib.Path) -> bool:
+    path = root / PACKAGE_JSON
+    if not path.is_file():
+        print(f'pdf reader: {PACKAGE_JSON} is not in the checkout', file=sys.stderr)
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except ValueError:
+        print(f'pdf reader: {PACKAGE_JSON} is not valid JSON', file=sys.stderr)
+        return False
+    deps = data.setdefault('dependencies', {})
+    if deps.get(PDF_READER[0]) == PDF_READER[1]:
+        print(f'pdf reader: {PDF_READER[0]} already in {PACKAGE_JSON}')
+        return True
+    deps[PDF_READER[0]] = PDF_READER[1]
+    data['dependencies'] = dict(sorted(deps.items()))
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+    print(f'pdf reader: {PDF_READER[0]} {PDF_READER[1]} added to {PACKAGE_JSON}')
+    return True
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print('usage: patch-extra-tools.py <app-dir>', file=sys.stderr)
         return 2
     root = pathlib.Path(sys.argv[1])
     ok = add_tool_files(root)
+    ok = add_pdf_reader(root) and ok
     # The name alone: "export function GetListeEvenement" is not found in the async
     # version this patch writes, so that marker appended a second copy each run.
     ok = append(root / COLLEGE_REL, EVENTS_REQUEST, 'GetListeEvenement', 'events list') and ok

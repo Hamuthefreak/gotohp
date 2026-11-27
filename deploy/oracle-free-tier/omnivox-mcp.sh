@@ -496,8 +496,11 @@ do_install() {
 	ensure_user
 	say "source"
 	fetch_source
-	npm_install
+	# The patches run before the dependencies are installed: one of them adds the
+	# package read-document reads PDFs with, and npm is what fetches it. Patched
+	# afterwards, the tool would be armed with a module the tree does not have.
 	apply_upstream_patches
+	npm_install
 	say "tools"
 	toolscheck || warn "install still done, but the MCP server will not serve until the tool module above is fixed"
 	say "unit"
@@ -546,8 +549,9 @@ do_update() {
 	unit_running && running=1
 	free_port
 	fetch_source
-	npm_install
+	# Patches first, then the install that fetches the dependency they add.
 	apply_upstream_patches
+	npm_install
 	say "tools"
 	toolscheck || warn "the MCP server will not serve until the tool module above is fixed"
 	# The unit is only installed here when this box already ran it: `update` used

@@ -43,7 +43,7 @@ TOOLS = [
     'get-college-news', 'get-grades-summary', 'get-online-forms',
     'get-overview', 'get-schedule', 'get-teachers',
     'get-college-document-link', 'get-mio-message-link', 'get-campus-events',
-    'get-upcoming-schedule',
+    'get-upcoming-schedule', 'read-document',
 ]
 # Tools whose answer is a stretch of days rather than one list: asked without a
 # window, they must still say something about what is on.
@@ -229,6 +229,15 @@ class Fake(BaseHTTPRequestHandler):
             else:
                 self.reply(400, f'document {args.get("document_id")} not found')
             return
+        if name == 'read-document':
+            # The text, not a path: the whole point of the tool. The fake account
+            # answers the id its own document listing prints.
+            if args.get('document_id') == 'DOC1' and args.get('source') == 'course-document':
+                self.reply(200, '# lab-notes.pdf\napplication/pdf, 1 KB, 2 pages, pdf\n'
+                                'Source: course document DOC1\n\nLab 3: the answer is 720.')
+            else:
+                self.reply(400, f'document {args.get("document_id")} not found for source {args.get("source")}')
+            return
         if name == 'get-assignment-file-link':
             ok = args.get('file_id') == 'F1'
             self.reply(200 if ok else 400, 'link ok' if ok else 'file not found')
@@ -375,7 +384,7 @@ TOOLS = [
     'get-college-news', 'get-grades-summary', 'get-online-forms',
     'get-overview', 'get-schedule', 'get-teachers',
     'get-college-document-link', 'get-mio-message-link', 'get-campus-events',
-    'get-upcoming-schedule',
+    'get-upcoming-schedule', 'read-document',
 ]
 ACCOUNT_TOOLS = {
     'get-upcoming-schedule',
@@ -588,6 +597,26 @@ for course, _ in documents[:1]:
     if created.exists():
         failures.append(('bogus document wrote Error.txt', 200, str(created)))
         print(f'{"":<46} {"":<4} <-- FAIL (wrote {created})')
+
+# The read that a client actually needs: the same document the link tool saves to
+# disk, arriving as its text instead. A path in the answer is exactly the failure
+# this tool was added to remove, so it fails here by name.
+if documents:
+    course, doc = documents[0]
+    status, body, _ = call('read-document', {'source': 'course-document', 'course_id': course, 'document_id': doc})
+    report(f'read-document {doc}', status, body, limit=120)
+    if 200 <= status < 300:
+        head = body.lstrip()
+        if 'File saved to:' in body:
+            failures.append(('read-document answered a saved path, not the text', status, body[:300]))
+            print(f'{"  it came back as text":<46} {"":<4} <-- FAIL (answered a saved path)')
+        elif not head.startswith('#') or 'Source:' not in body:
+            failures.append(('read-document did not say what it read', status, body[:300]))
+            print(f'{"  it came back as text":<46} {"":<4} <-- FAIL (no file header in the answer)')
+        else:
+            print(f'{"  it came back as text":<46} {"":<4} {len(" ".join(body.split()))} characters, not a path')
+    status, body, _ = call('read-document', {'source': 'course-document', 'course_id': course, 'document_id': BOGUS})
+    report('read-document (bogus)', status, body, expect_error=True, limit=110)
 
 # ---------------------------------------------------------------- mio
 print()

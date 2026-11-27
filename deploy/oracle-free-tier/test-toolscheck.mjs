@@ -136,7 +136,7 @@ else no(`and reports the unique names it found (${dupRun.stdout.trim().slice(0, 
 const toolList = fs.readFileSync(path.join(here, 'probe-tools.sh'), 'utf8');
 const listed = (toolList.match(/TOOLS = \[([\s\S]*?)\n\]/) || [])[1] || '';
 const probeTools = [...listed.matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]);
-for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events', 'get-upcoming-schedule']) {
+for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events', 'get-upcoming-schedule', 'read-document']) {
 	if (probeTools.includes(tool)) ok(`the probe calls ${tool}`);
 	else no(`the probe calls ${tool}`);
 }
@@ -198,7 +198,7 @@ else no('update stops the old server before patching');
 // The served tool list is read by its own shipped file, and that file has to
 // agree with the probe about which tools this deployment adds.
 const live = fs.readFileSync(path.join(here, 'toolscheck-live.py'), 'utf8');
-for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events', 'get-upcoming-schedule']) {
+for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events', 'get-upcoming-schedule', 'read-document']) {
 	if (live.includes(`'${tool}'`)) ok(`the served-tool check asks for ${tool}`);
 	else no(`the served-tool check asks for ${tool}`);
 }

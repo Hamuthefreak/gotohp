@@ -163,7 +163,7 @@ jobs:
           # install, after it ran, and never loosened: a tool that is missing
           # fails here with the install's log above it.
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
-            'for t in get-college-document-link get-mio-message-link get-campus-events get-upcoming-schedule; do
+            'for t in get-college-document-link get-mio-message-link get-campus-events get-upcoming-schedule read-document; do
                sudo -n grep -q "\b$t\b" /opt/omnivox-mcp/app/src/mcp/tools/extra/*.ts \
                  || { echo "::error::the extra read tool $t was not installed"; exit 1; }
              done; echo "extra read tools installed"'

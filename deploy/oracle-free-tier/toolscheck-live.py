@@ -18,6 +18,7 @@ EXTRA = (
     'get-mio-message-link',
     'get-campus-events',
     'get-upcoming-schedule',
+    'read-document',
 )
 
 

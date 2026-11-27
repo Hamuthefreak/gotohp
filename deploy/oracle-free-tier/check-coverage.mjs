@@ -18,8 +18,8 @@ import path from 'node:path';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ledgerPath = path.join(here, 'COVERAGE.md');
 
-// The `/tools` answer printed by run 45927975590 (job "Install the gate on the
-// relay VM", line "/tools answers 42 tools"), transcribed as printed. The run
+// The `/tools` answer printed by run 45940960937 (job "Install the gate on the
+// relay VM", line "/tools answers 43 tools"), transcribed as printed. The run
 // is cited in the ledger, so this fixture and the ledger pin the same thing.
 const PINNED_LIVE_TOOLS = `create-mio-folder
 delete-mio-message
@@ -57,6 +57,7 @@ get-teachers
 get-terms
 get-upcoming-schedule
 move-mio-message
+read-document
 read-mio-message
 reply-mio-message
 restore-mio-message

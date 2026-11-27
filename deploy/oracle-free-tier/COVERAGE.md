@@ -9,10 +9,10 @@ nothing invented.
 | Pin | Value |
 | --- | --- |
 | Live servers | `https://github.com/Beat-YT/omnivox-mcp` at `6164a1aa191424fa2d0c27836a44c0f5b89f8858` (`main`, depth 1), patched on the box by this repo's `patch-*.py` |
-| This repo at the moment of proof | `a93232c` (`feat(omnivox): read a document's text instead of stopping at a saved path`) |
-| Deploy run | `45940490195`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
+| This repo at the moment of proof | `ac379ae` (`docs(tools): ledger read-document, and probe the PDF an attachment really is`) |
+| Deploy run | `45940960937`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
 | Live tool list | that run's own output, line `/tools answers 43 tools`, printed after the install step |
-| Per-tool evidence | the same job's probe output, `75 answered, 16 rejected bad input, 43 of 43 tools exercised` |
+| Per-tool evidence | the same job's probe output, `76 answered, 16 rejected bad input, 43 of 43 tools exercised` |
 | Server with the extra tools | `d233cba` (college document link, MIO message link, campus events), `f1e5a4f` (upcoming schedule), `a93232c` (read document) |
 
 The tool names below are transcribed from the `/tools` answer above, not from
@@ -77,6 +77,7 @@ is the other half: the same file, fetched and read, so the text comes back.
 | Tool | Introduced | Exercised by | Observed | Verdict |
 | --- | --- | --- | --- | --- |
 | `read-document` | `a93232c` (this repo) | probe `read-document` on a real course document, and `read-document (bogus)` | `200 # F26_McIntyre_102-SWB_19.docx application/vnd…wordprocessingml.document, 88 KB, docx` and 24746 characters of its text, not a path; a wrong id answers `500 Omnivox answered with an error page` | live |
+| `read-document` | `a93232c` (this repo) | probe `read-document (mio attachment)` on the real attachment read-mio-message lists | `200 # Vanier_Food_Drive.pdf application/pdf, 32 KB, 1 page, pdf` and its text, so the PDF a client meets on a MIO or a solutions sheet is read, not saved | live |
 
 ### Schedule, canceled classes, campus events
 
@@ -119,7 +120,7 @@ is the other half: the same file, fetched and read, so the text comes back.
 | Other existing read tools | 13 | 11 | 2 |
 | **Served tool set** | **43** | | |
 
-The ledger holds 46 rows over the 43 served tools: three tools have a second row
+The ledger holds 47 rows over the 43 served tools: four tools have a second row
 for the bogus-id path. 30 served tools are live-confirmed (28 answering data, 2
 answering an honest "none"), 13 are unverified, and every unverified one is a
 write tool refused before Omnivox, a bogus-id-only exercise, or a read the

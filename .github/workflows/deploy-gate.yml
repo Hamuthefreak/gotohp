@@ -152,6 +152,7 @@ jobs:
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             'sudo -n env PATCH_SOURCE=/tmp/ovx-gate-ship/patch-download-guard.py \
              MIO_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-mio-guard.py \
+             EXTRA_PATCH_SOURCE=/tmp/ovx-gate-ship/patch-extra-tools.py \
              bash /tmp/ovx-gate-ship/omnivox-mcp.sh update'
           ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
             "sudo -n env GATE_SOURCE=/tmp/ovx-gate-ship/gate.mjs REF=$(git rev-parse HEAD) \

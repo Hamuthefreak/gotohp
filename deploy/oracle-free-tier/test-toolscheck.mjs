@@ -157,6 +157,20 @@ if (shipped.includes("'/Mobl/College/EvenementsWeb_GetFirstLoad'") && !shipped.i
 if (/apply_patch 'extra read tools' "\$\{EXTRA_PATCH_SOURCE:-\$PREFIX\/patches\/patch-extra-tools\.py\}" "\$EXTRA_PATCH_URL" "\$\{EXTRA_PATCH_SOURCE:-\}"/.test(installer)) {
 	ok('the installer prefers the shipped patch over its cached copy');
 } else no('the installer prefers the shipped patch over its cached copy');
+// Every patch the deploy ships has to be the one the box applies. The extra
+// read tools' patch was shipped but never named, so the box kept running the
+// copy cached from an earlier deploy - a fixed tool that still sent the old
+// request, and a probe that reported it as broken.
+const workflow = fs.readFileSync(path.join(here, '../../.github/workflows/deploy-gate.yml'), 'utf8');
+const updateCall = (workflow.match(/env[\s\S]{0,400}?omnivox-mcp\.sh update'/) || [''])[0];
+for (const [variable, file] of [
+	['PATCH_SOURCE', 'patch-download-guard.py'],
+	['MIO_PATCH_SOURCE', 'patch-mio-guard.py'],
+	['EXTRA_PATCH_SOURCE', 'patch-extra-tools.py'],
+]) {
+	if (updateCall.includes(`${variable}=/tmp/ovx-gate-ship/${file}`)) ok(`the deploy hands over the current ${file}`);
+	else no(`the deploy hands over the current ${file} (${variable} not passed to update)`);
+}
 const applyBlock = installer.slice(installer.indexOf('apply_patch()'), installer.indexOf('\n}\n', installer.indexOf('apply_patch()')));
 if (/\[\[ ! -s \$script \|\| -n \$\{4:-\} \]\]/.test(applyBlock)) ok('and refreshes a cached copy when a source is given');
 else no('and refreshes a cached copy when a source is given');

@@ -12,7 +12,7 @@ nothing invented.
 | This repo at the moment of proof | `e865bae` (`fix(probe): prefer the test's own solutions over a practice sheet for it`) |
 | Deploy run | `45944882954`, workflow `deploy-gate.yml`, conclusion `success`, job *Install the gate on the relay VM* |
 | Live tool list | that run's own output, line `/tools answers 43 tools`, printed after the install step |
-| Per-tool evidence | the same job's probe output, `95 answered, 31 rejected bad input, 43 of 43 tools exercised` |
+| Per-tool evidence | the same job's probe output, and its ledger step: `coverage: 43 of 43 served tools, 33 live-confirmed, 10 unverified` |
 | Server with the extra tools | `d233cba` (college document link, MIO message link, campus events), `f1e5a4f` (upcoming schedule), `a93232c` (read document) |
 
 The tool names below are transcribed from the `/tools` answer above, not from
@@ -34,7 +34,7 @@ reason says which. Tools are read-only unless the row says otherwise.
 | --- | --- | --- | --- | --- |
 | `get-college-documents` | `6164a1a` | probe `get-college-documents` | `200 # College documents (12) 12 document(s)` | live |
 | `get-college-document-link` | `d233cba` (this repo) | probe `get-college-document-link` | `200` returns the text of one document and says nothing was opened; no file to save upstream | live |
-| `get-college-document-link` | `d233cba` (this repo) | probe `get-college-document-link (bogus)` | `500 No college document with id 00000000-…` | unverified: bogus id only, the file path itself is never taken because upstream sends no file |
+| `get-college-document-link` | `d233cba` (this repo) | probe `get-college-document-link (bogus)` | `500 No college document with id 00000000-…` | live (rejects bad input: the tool itself is live on its own row above; this row is its refusal path) |
 | `get-college-news` | `6164a1a` | probe `get-college-news` | `200 # College news (20)` | live |
 | `get-college-list` | `6164a1a` | probe `get-college-list` | `200 {"count":1,"colleges":[{"code":"VAN","name":"Vanier College"}]}` | live |
 | `get-online-forms` | `6164a1a` | probe `get-online-forms` | `200 # Online forms (4) 4 open, 0 closed` | live |
@@ -49,7 +49,7 @@ reason says which. Tools are read-only unless the row says otherwise.
 | `search-mio-messages` | `6164a1a` | probe `search-mio-messages` | `200 # MIO search: "vanier" 21 result(s)` | live |
 | `get-mio-attachment-link` | `6164a1a` | probe `get-mio-attachment-link` | `200 File saved to: …/downloads/Vanier_Food_Drive.pdf` | live |
 | `get-mio-message-link` | `d233cba` (this repo) | probe `get-mio-message-link` | `200 File saved to: …/downloads/Vanier_Food_Drive.pdf (32263 bytes)` | live |
-| `get-mio-message-link` | `d233cba` (this repo) | probe `get-mio-message-link (bogus attachment)` | `500 Message … has no attachment 00000000-…` | unverified: bogus id only, the refusal is what this row proves |
+| `get-mio-message-link` | `d233cba` (this repo) | probe `get-mio-message-link (bogus attachment)` | `500 Message … has no attachment 00000000-…` | live (rejects bad input: the tool is live on its own row above; this row is its refusal path, which never reaches Omnivox) |
 | `create-mio-folder` | `6164a1a` | probe `create-mio-folder` | `500 A folder needs a name: pass the name to create.` | unverified: refusals only, before any call, and this write tool is never invoked in a run that could create anything |
 | `send-mio-message` | `6164a1a` | probe `send-mio-message` | `400 Invalid input` | unverified: refused by validation before Omnivox; a write tool, never sent |
 | `reply-mio-message` | `6164a1a` | probe `reply-mio-message` | `400 Invalid input` | unverified: refused by validation before Omnivox; a write tool, never sent |
@@ -101,7 +101,7 @@ is the other half: the same file, fetched and read, so the text comes back.
 | `get-course-info` | `6164a1a` | probe `get-course-info` for 6 courses | `200` course id, code, group, title | live |
 | `get-course-documents` | `6164a1a` | probe `get-course-documents` for 6 courses | `200` 3, 62, 40, 34, 31 and 25 document(s) | live |
 | `get-document-link` | `6164a1a` | probe `get-document-link` on a real id | `200 File saved to: …/downloads/F26_McIntyre_102-SWB_19.docx` | live |
-| `get-document-link` | `6164a1a` | probe `get-document-link (bogus)` | `500 Omnivox answered with an error page instead of a file` | unverified: bogus id only |
+| `get-document-link` | `6164a1a` | probe `get-document-link (bogus)` | `500 Omnivox answered with an error page instead of a file` | live (rejects bad input: the tool is live on its own row above, and its real save is the `.docx` `read-document` then reads) |
 | `get-course-evals` | `6164a1a` | probe `get-course-evals` for 6 courses | `200 Marks are points; percentages in parentheses …` | live |
 | `get-course-people` | `6164a1a` | probe `get-course-people` for 6 courses | `200 {"count":26,…}` … `{"count":41,…}` | live |
 | `get-absences` | `6164a1a` | probe `get-absences (20263)` and `(no term_id)` | `200 # Absences — term 20263 (11h total)` | live |
@@ -109,26 +109,38 @@ is the other half: the same file, fetched and read, so the text comes back.
 | `get-teachers` | `6164a1a` | probe `get-teachers (20263)` and `(no term_id)` | `200 {"term_id":"20263","teachers":[…]}` | live |
 | `get-terms` | `6164a1a` | probe `get-terms` | `200 {"default_term":"20263",…}` | live |
 | `search-people` | `6164a1a` | probe `search-people` | `200 {"count":15,…}` | live |
-| `get-service-link` | `6164a1a` | probe `get-service-link` | `200 Service links are disabled on this server.` | unverified: read-only upstream, but this server keeps external links off (`ENABLE_EXTERNAL_SERVICE_LINKS` unset), so it cannot reach Omnivox at all |
+| `get-service-link` | `6164a1a` | probe `get-service-link` with `service: mio` | `200 Service links are disabled on this server. They are off by default because each link logs into the full Omnivox account…` | unverified, and genuinely disabled: the call runs and answers its own refusal, but this server keeps external links off (`ENABLE_EXTERNAL_SERVICE_LINKS` unset) on purpose - a link is a full-account login, not a read |
 
 ## Rollup
 
 | Category | Tools | live | unverified |
 | --- | --- | --- | --- |
-| College documents | 5 | 4 | 1 |
-| MIO messages and attachments | 13 | 5 | 8 |
+| College documents | 5 | 5 | 0 |
+| MIO messages and attachments | 13 | 6 | 7 |
 | Assignments: list, detail and instructions | 6 | 4 | 2 |
 | Reading a document's contents | 1 | 1 | 0 |
 | Schedule, canceled classes, campus events | 5 | 5 | 0 |
-| Other existing read tools | 13 | 11 | 2 |
+| Other existing read tools | 13 | 12 | 1 |
 | **Served tool set** | **43** | | |
 
 Every served tool has a row, and a tool the probe calls more than once (a real
 id, a bogus id, a second source) has a row per call, so the table is longer than
-the tool list. 30 served tools are live-confirmed (28 answering data, 2 answering
-an honest "none"), 13 are unverified, and every unverified one is a write tool
-refused before Omnivox, a bogus-id-only exercise, or a read the server keeps
-switched off.
+the tool list. **33** served tools are live-confirmed (31 answering data, 2
+answering an honest "none") and **10** are unverified. The ten, by name and
+nothing else:
+
+| Unverified tool | Why it is not live |
+| --- | --- |
+| get-service-link` | Genuinely disabled here: the live call answers "Service links are disabled on this server"; each link is a full-account login, not a read |
+| get-assignment-file-link` | Read-only, but the account's assignments returned no file id to fetch it with |
+| get-assignment-submit-link` | Read-only URL builder that needs `MCP_SERVER_URL`, which this server does not set |
+| send-mio-message` | Writes: refused by validation, never sent |
+| reply-mio-message` | Writes: refused by validation, never sent |
+| flag-mio-message` | Writes: refused by validation, never flagged |
+| create-mio-folder` | Writes: refuses an empty name, never created |
+| move-mio-message` | Writes: refused a search-folder target, nothing moved |
+| delete-mio-message` | Writes: refuses an impossible id, nothing moved |
+| restore-mio-message` | Writes: refuses an impossible id, nothing restored |
 
 ## Finding the endpoint
 
@@ -156,11 +168,35 @@ seen.
 
 ## What is not proven at all
 
+The same ten as the table above, in prose, so no tool is missing from either:
+
 - `get-assignment-file-link` and `get-assignment-submit-link` never received a
-  real assignment file or a working public base URL.
-- Every MIO write tool (`send`, `reply`, `move`, `delete`, `restore`, `flag`,
-  `create-folder`) is listed because the server serves it; none was allowed to
-  reach Omnivox, by design. The probe only proves they refuse honestly.
-- `get-service-link` is off on this server; on a server with
+  real assignment file or a working public base URL. The detail now names the
+  attached instruction documents it does have, but this account's assignments
+  returned none with a file id.
+- Every MIO write tool (`send-mio-message`, `reply-mio-message`,
+  `move-mio-message`, `delete-mio-message`, `restore-mio-message`,
+  `flag-mio-message`, `create-mio-folder`) is listed because the server serves
+  it; none was allowed to reach Omnivox, by design. The probe only proves they
+  refuse honestly.
+- `get-service-link` is genuinely disabled on this server; on a server with
   `ENABLE_EXTERNAL_SERVICE_LINKS=true` it would log into the full account, which
   has never been tried and should not be.
+
+Everything else - 33 tools - is live-confirmed above with the text or list it
+returned.
+
+## The cancellation path, on a fixture
+
+This account has no cancelled classes, so the tool's live call can only show
+its "none" branch (which now prints `IndicateurAucunCoursAnnule` and the array it
+read, so "none" is checkable). The populated path is proven separately, through
+the installed code rather than a copy: `test-cancelled.mjs` imports the same
+`transformCoursAnnule()` the tool calls and runs it on
+`fixtures/cancelled-classes.json`, a pinned
+`/Mobl/CoursAnnule/GetCoursAnnuleModel` answer. It fails unless the class comes
+back with its course and group (`201-SF5-RE.00001`), its slot
+(`14:00-15:30` on the day Omnivox sent), its room, its teacher and the reason the
+teacher wrote, and unless the empty answer still parses to no cancellations. The
+deploy runs it on the box against `/opt/omnivox-mcp/app`, so the log shows the
+install's own parser passing it.

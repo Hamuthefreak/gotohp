@@ -1,0 +1,24 @@
+{
+  "_comment": "A real-shaped /Mobl/CoursAnnule/GetCoursAnnuleModel answer, with one cancellation. Fields and types mirror src/omnivox-api/typings/CoursAnnuleModel.ts upstream; the times are Omnivox's HHmm strings, the date is a JS timestamp, and the teacher's reason sits in CommentaireProf. Used by test-cancelled.mjs, which runs the same transformCoursAnnule() the tool calls.",
+  "ListeAnnulationCours": [
+    {
+      "DateCoursAnnule": 1795656000000,
+      "HeureDebutAnnulation": "1400",
+      "HeureFinAnnulation": "1530",
+      "NoCours": "201-SF5-RE",
+      "NoGroupe": "00001",
+      "NomCours": "Discrete Mathematics",
+      "NomProf": "Holly A McIntyre",
+      "Local": ["B-429"],
+      "CommentaireProf": "Teacher unwell: this class is cancelled and will be made up next week.",
+      "HasCommentaireProfTexte": true,
+      "DureeCommentaireProf": null,
+      "FichierCommentaireProf": "",
+      "HasCommentaireProfVocal": false,
+      "IDAnnulation": "5b1d6f2e-0f5a-4c2b-9a51-8a1f6d0c7e11",
+      "DateAbs": 0
+    }
+  ],
+  "DateCoursAnnule": 1764244800000,
+  "IndicateurAucunCoursAnnule": false
+}

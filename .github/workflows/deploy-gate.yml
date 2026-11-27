@@ -24,6 +24,8 @@ on:
       - "deploy/oracle-free-tier/test-gate-browser.mjs"
       - "deploy/oracle-free-tier/COVERAGE.md"
       - "deploy/oracle-free-tier/check-coverage.mjs"
+      - "deploy/oracle-free-tier/test-cancelled.mjs"
+      - "deploy/oracle-free-tier/fixtures/**"
       - ".github/workflows/deploy-gate.yml"
   workflow_dispatch:
 
@@ -106,7 +108,7 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o ConnectTimeout=20
           )
-          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'install -d -m 755 /tmp/ovx-gate-ship'
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" 'install -d -m 755 /tmp/ovx-gate-ship/fixtures'
           scp -q "${opts[@]}" \
             deploy/oracle-free-tier/gate.mjs \
             deploy/oracle-free-tier/omnivox-gate.sh \
@@ -122,7 +124,12 @@ jobs:
             deploy/oracle-free-tier/toolscheck-live.py \
             deploy/oracle-free-tier/COVERAGE.md \
             deploy/oracle-free-tier/check-coverage.mjs \
+            deploy/oracle-free-tier/test-cancelled.mjs \
             "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/"
+
+          scp -q "${opts[@]}" \
+            deploy/oracle-free-tier/fixtures/cancelled-classes.json \
+            "$VM_USER@$VM_HOST:/tmp/ovx-gate-ship/fixtures/"
 
           # The coverage ledger is evidence about the server, not part of it, so
           # it is checked here, against what is live on the box, and never gates
@@ -167,6 +174,13 @@ jobs:
                sudo -n grep -q "\b$t\b" /opt/omnivox-mcp/app/src/mcp/tools/extra/*.ts \
                  || { echo "::error::the extra read tool $t was not installed"; exit 1; }
              done; echo "extra read tools installed"'
+
+          # The cancelled-classes reader, on the tree the update just installed:
+          # this account has no cancellations to show live, so a pinned Omnivox
+          # answer is run through the same transformCoursAnnule() the tool calls,
+          # and the tool's own "none" branch is checked beside it.
+          ssh "${opts[@]}" "$VM_USER@$VM_HOST" \
+            'sudo -n bash -c "cd /opt/omnivox-mcp/app && ./node_modules/.bin/tsx /tmp/ovx-gate-ship/test-cancelled.mjs /opt/omnivox-mcp/app"'
 
           # The tool list a client actually receives, read from outside every
           # script above: the bytes the server answers on /tools, every name, and

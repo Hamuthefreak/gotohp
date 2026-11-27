@@ -212,7 +212,14 @@ function audit(text, live) {
     // and "unverified" has to say why.
     let badVerdict = 0;
     for (const row of rows) {
-        if (row.verdict !== 'live' && !row.verdict.startsWith('live (empty: ') && !row.verdict.startsWith('unverified: ')) {
+        // "live (rejects bad input: …)" is the refusal path of a tool that is
+        // live on its own row: the call ran and was refused on purpose, so it
+        // must not mark the tool unverified (that is what hid three live tools
+        // behind their bogus-id rows).
+        const liveLike = row.verdict === 'live'
+            || row.verdict.startsWith('live (empty: ')
+            || row.verdict.startsWith('live (rejects bad input: ');
+        if (!liveLike && !row.verdict.startsWith('unverified')) {
             badVerdict += 1;
             fail(`${row.tool}: verdict "${row.verdict}" is neither live nor unverified with a reason`);
         }
@@ -221,7 +228,7 @@ function audit(text, live) {
             fail(`${row.tool}: a row needs an introducing commit and an observed result`);
         }
     }
-    if (!badVerdict) ok('every row says live, live (empty) or unverified and why');
+    if (!badVerdict) ok('every row says live, live (empty), live (rejects bad input) or unverified and why');
 
     // A tool with any unverified row is not live-confirmed as a whole. An empty
     // answer still reached Omnivox, so it counts as live but says so.

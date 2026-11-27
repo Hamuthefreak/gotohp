@@ -80,7 +80,8 @@ export async function GetCollegeDocumentFile(documentId: string) {
             .filter(([key, value]) => value !== null && value !== '' && typeof value !== 'object' && /path|url|fich|file|doc|ext|type|titre|nom/i.test(key))
             .map(([key, value]) => `${key}=${String(value).slice(0, 40)}`)
             .join(' ');
-        throw new Error(`College document ${documentId} has no file attached (${String(item.Titre ?? item.NomDocument ?? '').trim() || 'untitled'}; ${shape || 'no file-like field at all'}). Call get-college-documents for the ones that do.`);
+        const seen = Object.keys(item).sort().join(',') || 'none';
+        throw new Error(`College document ${documentId} has no file attached (${String(item.Titre ?? item.NomDocument ?? '').trim() || 'untitled'}; ${shape || 'no file-like field at all'}; fields ${seen}). Call get-college-documents for the ones that do.`);
     }
 
     const page = await omnivox.page();

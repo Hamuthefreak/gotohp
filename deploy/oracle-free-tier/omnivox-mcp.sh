@@ -350,14 +350,43 @@ install_unit() {
 
 wait_health() {
 	local i
-	for i in $(seq 1 60); do
+	for i in $(seq 1 90); do
 		if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
 			echo "healthy on 127.0.0.1:$PORT after ${i}s"
 			return 0
 		fi
 		sleep 1
 	done
-	warn "no answer on /health after 60s"
+	warn "no answer on /health after 90s"
+	journalctl -u omnivox-mcp.service -n 30 --no-pager || true
+	return 1
+}
+
+# /health answers 503 until the server's headless Chrome has a page. Nothing is
+# wrong with the build when that is all it says: the first navigation after a
+# restart on a one-core box can take longer than 30s, and the server retries it
+# on the next request. The question here is whether *this* build is serving, so
+# the check asks for the page the server put on that port itself and looks at
+# its own journal only when the unit has actually stopped.
+serving_this_build() {
+	local i page
+	for i in $(seq 1 15); do
+		# Any 2xx page from the port is the server's own: it is the only thing
+		# bound there after free_port, and the unit is what would stop if the
+		# new code threw on load.
+		page=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null || true)
+		if [[ $page == 2* ]]; then
+			echo "the server answers on 127.0.0.1:$PORT (HTTP $page)"
+			return 0
+		fi
+		if [[ $(systemctl is-active omnivox-mcp.service 2>/dev/null || true) != active ]]; then
+			warn "the unit stopped while the update ran"
+			journalctl -u omnivox-mcp.service -n 30 --no-pager || true
+			return 1
+		fi
+		sleep 2
+	done
+	warn "the unit runs but nothing on 127.0.0.1:$PORT answers with its page"
 	journalctl -u omnivox-mcp.service -n 30 --no-pager || true
 	return 1
 }
@@ -529,10 +558,10 @@ do_update() {
 		# The server has to come up with the tools just written, and say on
 		# the port whether the build it loaded is this checkout's. A silent
 		# not-starting is what let an old process answer for a new build.
-		wait_health || {
-			warn "the server did not come up after the update"
-			return 1
-		}
+		# Whether the browser session is up is not this step's to fail on: it is
+		# reported, and serving_this_build below is what proves the build.
+		wait_health || warn "the browser session is not answering yet; it retries on the next request"
+		serving_this_build || return 1
 		say "tools registered"
 		local key
 		key=$(cat "$DATA/accessKey.txt" 2>/dev/null || true)

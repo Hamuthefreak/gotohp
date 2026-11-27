@@ -392,7 +392,11 @@ has 'the installer stops a leftover server before patching' 'free_port' "$instal
 # `update` used to stop the old server and then never start a new one, so the
 # served tool list stayed the build from before the update, with no error.
 has 'update installs the unit when the box runs one' 'running == 1 || -f $UNIT' "$installer"
-has 'and fails when the server does not come up' 'wait_health || {' "$installer"
+# The update fails only when the build is not serving. /health is 503 until the
+# browser session has a page, which is not a reason to fail an update.
+has 'and checks that the build itself is serving' 'serving_this_build || return 1' "$installer"
+has 'a dead unit stops the update with its journal' 'the unit stopped while the update ran' "$installer"
+lacks 'a slow browser session no longer fails the update' 'the server did not come up after the update' "$installer"
 # After a crash loop systemd rate-limits the unit; the reset has to happen
 # before the start, or a fixed build stays refused.
 python3 - "$installer" <<'PYEOF'

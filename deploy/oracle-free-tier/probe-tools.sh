@@ -125,6 +125,9 @@ class Fake(BaseHTTPRequestHandler):
 
         # A message that really has an attachment, so the new tools run the way
         # they do on the account.
+        if name == 'get-mio-attachments':
+            self.reply(200, f'attachments\n- poster.pdf (application/pdf, 1 KB) - message: {MSG_ID}\n')
+            return
         if name == 'read-mio-message':
             self.reply(200, f'from: someone\nAttachments:\n- poster.pdf (application/pdf, 1 KB) [attachment_id: {ATT_ID}]\nbody: hi')
             return
@@ -476,6 +479,9 @@ for name, args in (
     status, body, _ = call(name, args)
     harvest[name] = body
     report(name, status, body, limit=80)
+# The same listing, kept whole: a message body that explains itself is only
+# readable when the sections above are not cut at a fixed width.
+raw = {name: body for name, body in ((n, harvest[n]) for n in harvest)}
 
 courses = list(dict.fromkeys(re.findall(r'\(([0-9A-Z]{4,}\.[0-9]{4,})\)', harvest['get-courses-summary'])))
 print(f'\ncourses harvested: {len(courses)}')
@@ -591,6 +597,18 @@ if not message_ids:
 # one lists one. read-mio-message writes it as "[attachment_id: ...]".
 attachment = None
 read = 0
+# The attachments view names the messages that really have one, which is exact
+# where "[attachment_id: ...]" in a message body depends on how the body is
+# written. A message it names that this listing does not hold is still ours to
+# read: the id came from the same account.
+listed = []
+status, body, _ = call('get-mio-attachments', {})
+report('get-mio-attachments', status, body, limit=90)
+for line in body.splitlines():
+    found = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', line)
+    if found and V4.fullmatch(found.group(1)):
+        listed.append(found.group(1))
+message_ids = listed + [m for m in message_ids if m not in listed]
 # A message id that is not a v4 is refused before it reaches Omnivox, so it
 # proves nothing and must not eat the budget that finds an attachment.
 for mid in [m for m in message_ids if V4.fullmatch(m)][:12]:
@@ -709,6 +727,7 @@ for name, args in (
     status, body, _ = call(name.split(' ')[0], args)
     answer = f'{name} ({term})' if term and 'term_id' in args else name
     harvest[name.split(' ')[0]] = body
+    raw[name.split(' ')[0]] = body
     report(answer, status, body, limit=110)
     if status == 200 and name.split(' ')[0] in ACCOUNT_TOOLS and len(' '.join(body.split())) < 20:
         failures.append((answer, status, 'empty answer'))
@@ -735,7 +754,7 @@ for name in (
 # block: a loose match paired a notice's id with an earlier document's file and
 # asked for a document that has no file at all.
 college = []
-for block in re.split(r'\n## ', harvest['get-college-documents']):
+for block in re.split(r'\n## ', raw.get('get-college-documents', harvest['get-college-documents'])):
     if '- File:' in block:
         found = re.search(r'- ID: ([0-9a-fA-F-]{36})', block)
         if found:

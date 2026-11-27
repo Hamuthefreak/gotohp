@@ -207,6 +207,19 @@ else no('and reports a refused key instead of crashing');
 if (/closed port/.test(live)) ok('and proves it can fail against a closed port');
 else no('and proves it can fail against a closed port');
 
+// What the probe picks to fetch has to be something that can be fetched: a
+// notice's id is not a file, and a message id that is not a v4 never reaches
+// Omnivox. Both are chosen from the listing, block by block and v4 first.
+if (/for block in re\.split/.test(toolList)) ok('the college document is chosen from its own block');
+else no('the college document is chosen from its own block');
+if (/for mid in \[m for m in message_ids if V4\.fullmatch\(m\)\]/.test(toolList)) ok('only v4 message ids are read');
+else no('only v4 message ids are read');
+
+// The report has to show what the read actually said: a message that is listed
+// and then not read is how a found attachment went missing from the run.
+if (/if not match:\n\s+print\(f.{0,6}  read /.test(toolList)) ok('a message that lists no attachment is still shown');
+else no('a message that lists no attachment is still shown');
+
 console.log();
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

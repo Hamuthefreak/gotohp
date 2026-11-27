@@ -53,8 +53,10 @@ WRITE = {
     'move-mio-message', 'restore-mio-message', 'flag-mio-message',
     'create-mio-folder',
 }
-MSG_ID = '11111111-1111-1111-1111-111111111111'
-ATT_ID = '22222222-2222-2222-2222-222222222222'
+# A v4, because read-mio-message refuses anything else before it reaches
+# Omnivox; the probe only reads ids of this shape.
+MSG_ID = '11111111-1111-4111-8111-111111111111'
+ATT_ID = '22222222-2222-4222-8222-222222222222'
 TERM_TOOLS = {
     'get-overview', 'get-schedule', 'get-absences', 'get-teachers',
     'get-grades-summary', 'get-assignments-summary',
@@ -217,6 +219,11 @@ class Fake(BaseHTTPRequestHandler):
             ok = args.get('file_id') == 'F1'
             self.reply(200 if ok else 400, 'link ok' if ok else 'file not found')
             return
+        if name == 'read-mio-message':
+            # The fake account's own body, so it can never fall through to a
+            # generic stub with no id in it.
+            self.reply(200, f'from: someone\nattachment_id: {ATT_ID}\nbody: hi\n')
+            return
         if name == 'get-mio-attachment-link':
             ok = args.get('attachment_id') != BOGUS_UUID
             self.reply(200 if ok else 400, 'link ok' if ok else 'attachment not found')
@@ -267,6 +274,8 @@ else:
     print(f'self-test  baseline, fake account, no fault       exit {rc}  FAIL'
           ' (the harness does not pass, so the injections prove nothing)')
     print('\n'.join('    ' + line for line in out.strip().splitlines()[-12:]))
+    if os.environ.get('SELFTEST_VERBOSE'):
+        print(out)
 
 for mode, tool, shape, needle in (
     ('errorpage', 'get-course-info', 'error page served as a 200', 'Error.txt'),
@@ -582,7 +591,9 @@ if not message_ids:
 # one lists one. read-mio-message writes it as "[attachment_id: ...]".
 attachment = None
 read = 0
-for mid in message_ids[:12]:
+# A message id that is not a v4 is refused before it reaches Omnivox, so it
+# proves nothing and must not eat the budget that finds an attachment.
+for mid in [m for m in message_ids if V4.fullmatch(m)][:12]:
     status, body, _ = call('read-mio-message', {'message_id': mid})
     read += 1
     if read == 1 or status != 200:
@@ -590,6 +601,8 @@ for mid in message_ids[:12]:
     elif not 200 <= status < 300:
         report('read-mio-message', status, body, limit=110)
     match = re.search(r'attachment_id: ([0-9A-Fa-f-]{8,})', body)
+    if not match:
+        print(f'{"  read " + mid: <46} {status:<4} {body[:80]}')
     if 200 <= status < 300 and match:
         attachment = (mid, match.group(1))
         print(f'{"read-mio-message (" + str(read) + " read)":<46} {status:<4} has an attachment: {match.group(1)}')
@@ -718,10 +731,15 @@ for name in (
 # it is supposed to leave behind or the list it is supposed to refuse.
 # Only an entry that names a file can be fetched. get-college-documents prints
 # "- File: <ext>, <size>" for those, and some notices carry none at all.
-college = [
-    match.group(1)
-    for match in re.finditer(r'- File: .*\n(?:.*\n)*?- ID: ([0-9a-fA-F-]{36})', harvest['get-college-documents'])
-]
+# One block per document, so a file line only counts for the id in its own
+# block: a loose match paired a notice's id with an earlier document's file and
+# asked for a document that has no file at all.
+college = []
+for block in re.split(r'\n## ', harvest['get-college-documents']):
+    if '- File:' in block:
+        found = re.search(r'- ID: ([0-9a-fA-F-]{36})', block)
+        if found:
+            college.append(found.group(1))
 if college:
     started = time.time()
     status, body, _ = call('get-college-document-link', {'document_id': college[0]})

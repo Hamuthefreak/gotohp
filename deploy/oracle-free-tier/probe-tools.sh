@@ -43,7 +43,11 @@ TOOLS = [
     'get-college-news', 'get-grades-summary', 'get-online-forms',
     'get-overview', 'get-schedule', 'get-teachers',
     'get-college-document-link', 'get-mio-message-link', 'get-campus-events',
+    'get-upcoming-schedule',
 ]
+# Tools whose answer is a stretch of days rather than one list: asked without a
+# window, they must still say something about what is on.
+WINDOW_TOOLS = {'get-upcoming-schedule'}
 WRITE = {
     'send-mio-message', 'reply-mio-message', 'delete-mio-message',
     'move-mio-message', 'restore-mio-message', 'flag-mio-message',
@@ -148,6 +152,12 @@ class Fake(BaseHTTPRequestHandler):
         if name == 'get-campus-events':
             self.reply(200, '# Campus events (1)\n\n## Open house\n- When: Sat, Nov 28 10:00\n')
             return
+        if name == 'get-upcoming-schedule':
+            # Echo the window it was asked for, so a tool that ignores its own
+            # argument is visible rather than looking right.
+            window = args.get('days', 7)
+            self.reply(200, f'# Next {window} days: 1 entry\n\n## Sat, Nov 28\n- 10:00 Open house')
+            return
         # The three failure shapes a real server has produced or could produce.
         if mode == 'errorpage' and name == 'get-course-info':
             self.reply(200, f'File saved to: {downloads}/Error.txt')
@@ -227,6 +237,7 @@ class Fake(BaseHTTPRequestHandler):
             'get-college-document-link': 'college documents',
             'get-mio-message-link': 'attachments',
             'get-campus-events': 'events',
+            'get-upcoming-schedule': 'Next 7 days: 1 entry\n- 10:00 Open house',
         }
         self.reply(200, bodies.get(name, f'{name} ok'))
 
@@ -304,7 +315,7 @@ DOWNLOADS=${DOWNLOADS:-/opt/omnivox-mcp/data/downloads}
 # probe is asking a process that is not running this checkout (an older one
 # still holding the port, say), and every answer below would describe that
 # process, not the one just installed.
-EXTRA_TOOLS=${EXTRA_TOOLS:-get-college-document-link get-mio-message-link get-campus-events}
+EXTRA_TOOLS=${EXTRA_TOOLS:-get-college-document-link get-mio-message-link get-campus-events get-upcoming-schedule}
 
 key=$(cat "$KEY_FILE" 2>/dev/null || true)
 [[ -n $key ]] || {
@@ -341,8 +352,10 @@ TOOLS = [
     'get-college-news', 'get-grades-summary', 'get-online-forms',
     'get-overview', 'get-schedule', 'get-teachers',
     'get-college-document-link', 'get-mio-message-link', 'get-campus-events',
+    'get-upcoming-schedule',
 ]
 ACCOUNT_TOOLS = {
+    'get-upcoming-schedule',
     'get-overview', 'get-schedule', 'get-absences', 'get-teachers',
     'get-grades-summary', 'get-assignments-summary', 'get-cancelled-classes',
     'get-calendar', 'get-college-list', 'get-college-news',
@@ -732,6 +745,16 @@ else:
 
 status, body, _ = call('get-campus-events', {})
 report('get-campus-events', status, body, limit=110)
+
+# The schedule for the next days and weeks: one page of the calendar would miss
+# anything past it, so the tool pages until the window is covered.
+status, body, _ = call('get-upcoming-schedule', {})
+report('get-upcoming-schedule', status, body, limit=110)
+if status == 200 and not any(word in body for word in ('entry', 'entries', 'Nothing on the calendar')):
+    failures.append(('get-upcoming-schedule said nothing about the window', status, body[:200]))
+    print(f'{"  it describes the window":<46} {"":<4} <-- FAIL')
+status, body, _ = call('get-upcoming-schedule', {'days': 14})
+report('get-upcoming-schedule (14 days)', status, body, limit=90)
 
 # Every tool a server lists must be one this probe knows, so an upstream tool -
 # a write tool included - cannot slip in unaccounted for.

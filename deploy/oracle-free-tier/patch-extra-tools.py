@@ -9,10 +9,11 @@ install, is idempotent, and a moved anchor fails the install loudly instead of
 quietly shipping fewer tools.
 
 What it adds
-  1. Three read tools upstream has no tool for, all `/Mobl/` reads:
+  1. Four read tools upstream has no tool for, all `/Mobl/` reads:
        get-college-document-link  a document the college sent (DocMessageCollege)
        get-mio-message-link       a MIO attachment that really exists (Mio)
        get-campus-events          the college's events list (College)
+       get-upcoming-schedule      every calendar page until the next N days are covered
   2. `scripts/toolscheck.ts`: imports every tool module and names the one that
      throws on load. A module that throws does not just lose its own tool, it
      exits the server at startup - that is how `delete-mio-message` vanished at
@@ -155,6 +156,124 @@ mcpServer.registerTool('get-mio-message-link',
         return {
             content: [{ type: 'text', text: `File saved to: ${saved}` }],
         };
+    }
+);
+'''
+
+# The app calendar answers one page per call. "What is on for the next two
+# weeks" is not one page: paging stops when an empty page arrives, when the page
+# is the first one with nothing in the window, or at a hard cap - so a calendar
+# with months of past events still reaches the days the reader asked about.
+UPCOMING_SCHEDULE = '''import { GetCalendrierModel } from "@api/Calendrier";
+import { mcpServer } from "src/mcp/server";
+import { z } from "zod";
+
+const input = z.object({
+    days: z.number().int().min(1).max(90).default(7).describe(\'How many days ahead to cover, counted from the start of today (default 7, max 90).\'),
+});
+
+const MAX_PAGES = 20;
+
+const startOfToday = () => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+};
+
+const showTime = (ms: number) => {
+    if (!Number.isFinite(ms) || ms <= 0) return "";
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+const showDay = (ms: number) => {
+    if (!Number.isFinite(ms) || ms <= 0) return "";
+    return new Date(ms).toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" });
+};
+
+const CANCELLED = /annul|cancel/i;
+
+mcpServer.registerTool(\'get-upcoming-schedule\',
+    {
+        title: \'Get Upcoming Schedule\',
+        description: \'What happens over the next N days (default 7): classes, exams, deadlines, holidays and day swaps from the real calendar, covering every page until the window ends. Cancelled classes are marked as cancelled. Read-only.\',
+        inputSchema: input,
+        annotations: {
+            readOnlyHint: true,
+            destructiveHint: false,
+        },
+    },
+    async (args) => {
+        const days = args.days ?? 7;
+        const from = startOfToday().getTime();
+        const to = from + days * 86_400_000;
+        const seen = new Set<string>();
+        const inWindow: any[] = [];
+        let pages = 0;
+        let reachedEnd = false;
+
+        for (let page = 0; page < MAX_PAGES; page++) {
+            const model: any = await GetCalendrierModel(page);
+            pages = page + 1;
+            const list: any[] = Array.isArray(model?.ListeEvenements) ? model.ListeEvenements : [];
+            if (list.length === 0) {
+                reachedEnd = true;
+                break;
+            }
+            let afterWindow = 0;
+            for (const item of list) {
+                const event = item?.Evenement ?? item;
+                const start = Number(event?.TimestampDateEvenement);
+                if (!Number.isFinite(start) || start <= 0) continue;
+                if (start >= to) {
+                    afterWindow++;
+                    continue;
+                }
+                const end = Number(event?.TimestampDateFin);
+                if (start < from && !(Number.isFinite(end) && end >= from)) continue;
+                const key = `${event?.IdEvenement ?? ""}|${start}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                inWindow.push({ event, start });
+            }
+            // The calendar runs forwards in time: a page that has not reached
+            // the window end yet is the only reason to ask for another.
+            if (afterWindow > 0 || (!model?.IndicateurPageSuivante && page === 0)) {
+                reachedEnd = true;
+                break;
+            }
+            if (model?.IndicateurPageSuivante === false) {
+                reachedEnd = true;
+                break;
+            }
+        }
+
+        inWindow.sort((a, b) => a.start - b.start);
+        const header = `# Next ${days} day${days === 1 ? "" : "s"}: ${inWindow.length} entr${inWindow.length === 1 ? "y" : "ies"}`;
+        if (!inWindow.length) {
+            return {
+                content: [{ type: \'text\', text: `${header}\\nNothing on the calendar for this window.` }],
+            };
+        }
+
+        const lines = [header, ""];
+        if (!reachedEnd) lines.push(`(stopped after ${pages} pages; the window may continue)`, "");
+        let day = "";
+        for (const { event, start } of inWindow) {
+            const heading = showDay(start);
+            if (heading !== day) {
+                day = heading;
+                lines.push(`## ${heading}`);
+            }
+            const title = String(event?.Titre ?? event?.TitreAng ?? "(untitled)");
+            const time = showTime(start);
+            const cancelled = CANCELLED.test(title) || CANCELLED.test(String(event?.Type ?? ""));
+            const bits = [time ? `${time} ` : "", title, cancelled ? " (cancelled)" : ""];
+            const room = event?.Details?.Local ?? event?.Details?.NoLocal;
+            if (room) bits.push(` - ${room}`);
+            lines.push(`- ${bits.join("")}`);
+        }
+        return { content: [{ type: \'text\', text: lines.join("\\n") }] };
     }
 );
 '''
@@ -369,6 +488,7 @@ def add_tool_files(root: pathlib.Path) -> bool:
         ('college-document-link.ts', COLLEGE_DOCUMENT_LINK),
         ('mio-message-link.ts', MIO_MESSAGE_LINK),
         ('campus-events.ts', CAMPUS_EVENTS),
+        ('upcoming-schedule.ts', UPCOMING_SCHEDULE),
     ):
         path = target / name
         if path.is_file() and path.read_text() == body:

@@ -328,6 +328,18 @@ has 'it saves the file the document points at' 'PathFichier' "$(cat "$ex_root/sr
 has 'the MIO attachment tool is added' 'get-mio-message-link' "$(cat "$ex_root/src/mcp/tools/extra/mio-message-link.ts" 2>/dev/null)"
 has 'it checks the pair before asking Omnivox' 'ResolveMioAttachment' "$(cat "$ex_root/src/mcp/tools/extra/mio-message-link.ts" 2>/dev/null)"
 has 'the campus events tool is added' 'get-campus-events' "$(cat "$ex_root/src/mcp/tools/extra/campus-events.ts" 2>/dev/null)"
+# "The next days and weeks" is not one calendar page: the tool has to page until
+# the window ends, and a single call would silently cover only the first page.
+sched=$(cat "$ex_root/src/mcp/tools/extra/upcoming-schedule.ts" 2>/dev/null)
+has 'the upcoming schedule tool is added' 'get-upcoming-schedule' "$sched"
+has 'it pages the calendar' 'GetCalendrierModel(page)' "$sched"
+has 'and stops when the page passes the window' 'afterWindow' "$sched"
+has 'and is bounded' 'MAX_PAGES' "$sched"
+has 'it takes the window in days' 'days: z.number' "$sched"
+has 'it marks cancelled classes' 'cancelled' "$sched"
+has 'it is read-only' 'readOnlyHint: true' "$sched"
+lacks 'it never writes to the calendar' 'SetCalendarFilters' "$sched"
+lacks 'it never calls a write tool' 'delete-mio-message' "$sched"
 has 'the events list request is added' 'export async function GetListeEvenement' "$(cat "$ex_root/src/omnivox-api/requests/College.ts")"
 # The endpoint Omnivox actually serves. The first version of this patch asked
 # for one that answers only an error page, and a box that ran it kept it.

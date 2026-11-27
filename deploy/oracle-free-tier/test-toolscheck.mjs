@@ -136,7 +136,7 @@ else no(`and reports the unique names it found (${dupRun.stdout.trim().slice(0, 
 const toolList = fs.readFileSync(path.join(here, 'probe-tools.sh'), 'utf8');
 const listed = (toolList.match(/TOOLS = \[([\s\S]*?)\n\]/) || [])[1] || '';
 const probeTools = [...listed.matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]);
-for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events']) {
+for (const tool of ['get-college-document-link', 'get-mio-message-link', 'get-campus-events', 'get-upcoming-schedule']) {
 	if (probeTools.includes(tool)) ok(`the probe calls ${tool}`);
 	else no(`the probe calls ${tool}`);
 }
@@ -166,7 +166,10 @@ if (/apply_patch 'extra read tools' "\$\{EXTRA_PATCH_SOURCE:-\$PREFIX\/patches\/
 const workflowPath = path.join(here, '../../.github/workflows/deploy-gate.yml');
 if (fs.existsSync(workflowPath)) {
 	const workflow = fs.readFileSync(workflowPath, 'utf8');
-	const updateCall = (workflow.match(/env[\s\S]{0,400}?omnivox-mcp\.sh update'/) || [''])[0];
+	// The step now runs update under `bash -x` through a pipeline, so the env
+	// and the patch name are further apart than a single short window.
+	const at = workflow.indexOf('omnivox-mcp.sh update');
+	const updateCall = at === -1 ? '' : workflow.slice(Math.max(0, at - 1200), at + 40);
 	for (const [variable, file] of [
 		['PATCH_SOURCE', 'patch-download-guard.py'],
 		['MIO_PATCH_SOURCE', 'patch-mio-guard.py'],
@@ -179,8 +182,18 @@ if (fs.existsSync(workflowPath)) {
 	console.log(`  skip no checkout here (${workflowPath}), so the deploy's own wiring is checked in CI only`);
 }
 const applyBlock = installer.slice(installer.indexOf('apply_patch()'), installer.indexOf('\n}\n', installer.indexOf('apply_patch()')));
-if (/\[\[ ! -s \$script \|\| -n \$\{4:-\} \]\]/.test(applyBlock)) ok('and refreshes a cached copy when a source is given');
-else no('and refreshes a cached copy when a source is given');
+// A shipped patch is used from the path the deploy wrote, and a patch that was
+// never shipped falls back to the cached copy rather than to nothing.
+if (/shipped &\& -s \$shipped/.test(installer) && /script=\$shipped/.test(installer)) ok('and uses the shipped path when a source is given');
+else no('and uses the shipped path when a source is given');
+if (/elif \[\[ ! -s \$script \]\]/.test(installer)) ok('and fetches a copy when nothing was shipped');
+else no('and fetches a copy when nothing was shipped');
+// The install must say why a patch failed, and must not let a leftover server
+// answer for the build it is about to replace.
+if (/patch: exit/.test(installer)) ok('a patch failure is echoed with its exit code');
+else no('a patch failure is echoed with its exit code');
+if (/do_update\(\) \{\n(\t[^\n]*\n)*\tfree_port/.test(installer)) ok('update stops the old server before patching');
+else no('update stops the old server before patching');
 
 console.log();
 console.log(`${pass} passed, ${fail} failed`);

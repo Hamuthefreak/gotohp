@@ -246,7 +246,7 @@ class Fake(BaseHTTPRequestHandler):
         bodies = {
             'get-courses-summary': 'Your courses\n- Introduction (ENG1.1234)\n',
             'get-terms': 'Fall 2026 {"default_term":"20263","terms":[{"id":"20263","name":"Fall 2026"}]}',
-            'get-mio-messages': f'inbox\n- Message \u00ab hello \u00bb\n- ID: {MSG_ID}\n',
+            'get-mio-messages': f'inbox\n## hello\n- From: someone\n- Attachments: poster.pdf\n- ID: {MSG_ID}\n',
             'get-mio-folders': 'INBOX\nSent',
             'get-course-assignments': '- ID: ASG1\n',
             'get-course-documents': '- ID: DOC1\n',
@@ -621,7 +621,17 @@ for line in body.splitlines():
     found = re.search(r'([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})', line)
     if found and V4.fullmatch(found.group(1)):
         listed.append(found.group(1))
-message_ids = listed + [m for m in message_ids if m not in listed]
+# The inbox itself says which messages carry an attachment ("- Attachments:
+# name"), and reading one of those first is what makes the attachment tools
+# reachable at all when the body does not repeat the id.
+inbox = harvest['get-mio-messages']
+with_file = []
+for block in re.split(r'\n## ', inbox):
+    if '- Attachments:' in block:
+        found = re.search(r'- ID: ([0-9A-Fa-f-]{8}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{4}-[0-9A-Fa-f-]{12})', block)
+        if found:
+            with_file.append(found.group(1))
+message_ids = listed + with_file + [m for m in message_ids if m not in listed and m not in with_file]
 # A message id that is not a v4 is refused before it reaches Omnivox, so it
 # proves nothing and must not eat the budget that finds an attachment.
 for mid in [m for m in message_ids if V4.fullmatch(m)][:12]:

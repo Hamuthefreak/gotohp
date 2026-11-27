@@ -567,6 +567,7 @@ for course in courses:
 print()
 instructions = ''
 assignment_notes = []
+teacher_files = []
 for course, aid in assignments[:20]:
     status, body, _ = call('get-assignment-detail', {'course_id': course, 'assignment_id': aid})
     report(f'get-assignment-detail {aid}', status, body, limit=110)
@@ -574,11 +575,16 @@ for course, aid in assignments[:20]:
         assignment_notes.append((aid, body))
     # The instructions are the reason this tool exists; an answer that stops at
     # the deadline is the stub the mission is asking to close.
-    if not instructions and 200 <= status < 300 and '## Instructions' in body:
+    if 200 <= status < 300 and '## Instructions' in body:
         text = body.split('## Instructions', 1)[1].split('\n## ', 1)[0].strip()
-        if len(text) > 40:
+        # The tool's own "no description text" note is not instructions; counting
+        # it would prove nothing.
+        says_none = text.startswith('Omnivox has no description text')
+        if not instructions and not says_none and len(text) > 40:
             instructions = text
             print(f'{"  the instructions text":<46} {"":<4} {len(text)} characters: {" ".join(text.split())[:80]!r}')
+        for fid in re.findall(r'File ID: (\S+) \(role: teacher_document\)', body):
+            teacher_files.append((course, aid, fid))
     # This deployment serves files and runs without MCP_SERVER_URL, so the tool
     # is documented to refuse and say why. Assert that exact refusal: a silent
     # success would mean link mode turned on, which changes every download.
@@ -605,6 +611,25 @@ if assignments:
         'course_id': course, 'assignment_id': aid, 'file_id': BOGUS, 'role': 'teacher_document',
     })
     report('get-assignment-file-link (bogus)', status, body, expect_error=True, limit=110)
+
+# No description text anywhere: the instructions may still be an attached
+# document, which read-document reads. That is the content, not a path.
+if not instructions and teacher_files:
+    course, aid, fid = teacher_files[0]
+    status, body, _ = call('read-document', {
+        'source': 'assignment-file', 'course_id': course, 'assignment_id': aid,
+        'file_id': fid, 'role': 'teacher_document',
+    })
+    report('read-document (assignment instructions file)', status, body, limit=120)
+    if 200 <= status < 300:
+        text = body.split('Source:', 1)[-1].split('\n', 1)[-1].strip() if 'Source:' in body else ''
+        if 'File saved to:' in body or len(text) < 40:
+            failures.append(('the assignment instruction file did not come back as text', status, body[:300]))
+            print(f'{"  the instructions text":<46} {"":<4} <-- FAIL ({len(text)} characters)')
+        else:
+            instructions = text
+            print(f'{"  the instructions text":<46} {"":<4} {len(text)} characters of the attached document: '
+                  f'{" ".join(text.split())[:70]!r}')
 
 if not instructions:
     # An honest "Omnivox keeps no description text for this assignment" is an
@@ -675,6 +700,10 @@ if documents:
 # its own listing prints, and it has to come back as text, not as "saved as".
 wanted = re.compile(r'test\s*2|test_2|test-2|solution|corrig', re.I)
 named = [(c, d) for c, d in documents if wanted.search(document_names.get((c, d), ''))]
+# "Test 2" is the document the mission names; a solutions worksheet is only the
+# fallback when this account's listing has no Test 2 at all.
+test2 = [(c, d) for c, d in named if re.search(r'test\s*2|test_2|test-2', document_names.get((c, d), ''), re.I)]
+named = test2 + [pair for pair in named if pair not in test2]
 if named:
     course, doc = named[0]
     title = document_names.get((course, doc), doc)

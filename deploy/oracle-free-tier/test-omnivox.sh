@@ -349,6 +349,21 @@ has 'a wrong attachment id names the ones that exist' 'has no attachment' "$(cat
 has 'the attachment itself is still fetched as before' 'export function GetMioAttachment' "$(cat "$ex_root/src/omnivox-api/requests/Mio.ts")"
 has 'the pre-flight script is added' 'registered > 0' "$(cat "$ex_root/scripts/toolscheck.ts" 2>/dev/null)"
 has 'the unit flag is accepted by the server entry point' 'process.argv.splice(at, 1)' "$(cat "$ex_root/src/index.ts")"
+# The entry point upstream names src/index.js is ESM JavaScript, where `#` is
+# not a comment: a hook with shell-style comments crashed the server at startup
+# with "SyntaxError: Invalid or unexpected token" and took every tool with it.
+hook=$(cat "$ex_root/src/index.ts")
+lacks 'the entry hook uses JS comments, not #' '^# `npm start' "$(head -1 <<<"$hook")"
+if printf '%s\n' "$hook" >"$ex_root/hook.mjs" && node --check "$ex_root/hook.mjs" 2>/dev/null; then
+	ok 'the entry point still parses as JavaScript'
+else
+	no 'the entry point still parses as JavaScript'
+fi
+if node --check "$ex_root/hook.mjs" 2>&1 | grep -q "Invalid or unexpected token"; then
+	no 'the # comment would have been caught'
+else
+	ok 'the # comment would have been caught'
+fi
 has 'it says what it applied' 'attachment guard: applied' "$out"
 # The guard must not add a second declaration of the function it anchors on.
 att=$(grep -c 'export function GetMioAttachment' "$ex_root/src/omnivox-api/requests/Mio.ts")

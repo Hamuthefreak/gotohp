@@ -516,12 +516,12 @@ def main() -> int:
 
 
 PASS_THROUGH_FLAGS = '''
-# `npm start -- --kill-others-on-fail`: npm hands its own extra arguments to
-# `tsx`, not to the server, so a unit that passes one would either be ignored or
-# stop the server from starting. A launcher that understands it is not needed
-# here - npm's children already go with it in the unit's mixed cgroup - so the
-# flag is accepted and ignored, and `npm start -- <anything else>` still fails
-# loudly instead of starting a server that answers nothing.
+// `npm start -- --kill-others-on-fail`: npm hands its own extra arguments to
+// `tsx`, not to the server, so a unit that passes one would either be ignored or
+// stop the server from starting. A launcher that understands it is not needed
+// here - npm's children already go with it in the unit's mixed cgroup - so the
+// flag is accepted and ignored, and `npm start -- <anything else>` still fails
+// loudly instead of starting a server that answers nothing.
 for (const flag of ['--kill-others-on-fail']) {
     const at = process.argv.indexOf(flag);
     if (at !== -1) process.argv.splice(at, 1);

@@ -534,12 +534,16 @@ for course, _ in documents[:1]:
 print()
 # The ids as the listing writes them, with whatever separator it uses put back
 # to a dash so the call gets a plain uuid.
+# read-mio-message checks that its id is a UUID v4, so the ids that are one are
+# tried first; one that is not is still tried, and counts as exercised.
+V4 = re.compile(r'[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}')
 message_ids = list(dict.fromkeys(
     ''.join(m) for m in re.findall(
         r'\b([0-9A-Fa-f]{8})[- ]([0-9A-Fa-f]{4})[- ]([0-9A-Fa-f]{4})[- ]([0-9A-Fa-f]{4})[- ]([0-9A-Fa-f]{12})\b',
         harvest['get-mio-messages'],
     )
 ))
+message_ids.sort(key=lambda mid: not V4.fullmatch(mid))
 if not message_ids:
     failures.append(('get-mio-messages listed no id', 200, harvest['get-mio-messages'][:200]))
     print(f'{"read-mio-message":<46} {"":<4} <-- FAIL (no message id in the inbox listing)')
